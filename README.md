@@ -183,4 +183,10 @@ La corrección personal tendrá en cuenta la calidad del código entregado y cas
 
 El ejercicio nos pide un script de bash que genere un compose para N clientes. Paso a explicar la solucion propuesta paso por paso:
 
-1. 
+1. Como decision de diseño me parece que lo mas facil es hacerlo directamente en bash, no invocar a un subscript de Python como tambien se podria haber hecho perfectamente.
+2. Se pide que el script pueda recibir dos parametros: el nombre del archivo de salida y el numero N. Esto se puede restringir haciendo el checkeo: `if [ "$#" -ne 2 ];`, y luego de esto podemos definir el nombre del archivo de salida como `OUTPUT_FILE="$1"` y el numero de clientes como `CLIENT_COUNT="$2"`.
+3. Vamos ahora a llenar el contenido del archivo usando `cat` y redireccionado el output para escribir en `OUTPUT_FILE`. Primero escribimos la parte del archivo que va a ser siempre igual: definimos el nombre del compose y los services del server, que por ahora se antienen iguales al compose del ejemplo dado (`docker-compose-dev.yaml`).
+4. Luego, siguiendo la estructura del compose ejemplo, generamos los servicios de los clientes dinamicamente. Usamos un for para escribir el bloque de yaml para un cliente N, con la estructura igual a la del compose de ejemplo, con esto quiero decir el nombre del container en un formato estandard tipo `client${i}` y con la imagen de `client:latest` y definiendo el entrypoint, las variables de entorno, la network y el depends_on de una misma manera.
+5. Para terminar escribiendo el compose nos falta la ultima seccion que es donde se define la parte de redes. Esta última también es comun al compose de ejemplo asi que lo agregamos de esa manera.
+
+De esta manera generamos un script que forma un archivo yaml que instancia la cantidad de clientes que queramos, con sus respectivos servicios y completamente funcional como se puede ver haciendo ejecutando los makes o corriendo los tests.
