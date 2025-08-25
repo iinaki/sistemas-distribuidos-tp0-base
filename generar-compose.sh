@@ -1,5 +1,4 @@
 #!/bin/bash
-# Como respuesta del ejercicio 1 creamos un script de bash para generar un docker compose con N clientes
 
 if [ "$#" -ne 2 ]; then
     echo "Uso: $0 <archivo-salida.yaml> <cantidad-clientes>"
