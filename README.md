@@ -210,3 +210,20 @@ Entonces los cambios realizados fueron realmente muy pequeños, le agregamos sim
     ```
 
 Y de esta manera logramos montar los archivos de configuracion que tenemos locales dentro de cada contenedor.
+
+# Resolucion del ejercicio 3
+
+La idea de este ejercicio es crear un script que valide el funcionamiento del server, esto es que al mandarle un mensaje cualquiera se reciba exactamente este mismo mensaje. Para esto debí investigar que hace el comando `netcat`: esta es una herramienta que sirve para escribir y leer datos en la red. Pero de que red estamos hablando? Acá surge el primer problema de este ejercicio: como podemos hacer para conectarnos desde el script a la red que se crea en el docker-compose. Si se mira el script, es bastante simple ya que es basicamente una linea de comando que se ejecuta en la shell, pero creo que alcanza un grado de dificultad bastante alta ya que en una linea se componen bastantes funcionalidades e ideas. La línea mas importante del script es la siguiente:
+
+`RESPONSE="$(docker run --rm --network "${NETWORK_NAME}" busybox sh -c "echo -n '${MSG}' | nc ${SERVER_NAME} ${PORT}")"`
+
+Y esto es porque gracias a este comando nos podemos meter en la red de docker y probar la funcionalidad del server. Paso a explicarla. 
+
+1. `RESPONSE="$(...)"` Captura la salida del comando y la guarda en la variable RESPONSE
+2. `docker run --rm` Ejecuta un contenedor temporal que se elimina automáticamente al terminar
+3. `--network "${NETWORK_NAME}"` Conecta el contenedor a la red definida en `NETWORK_NAME` (que es `tp0_testing_net`, la misma red donde está el servidor)
+4. `busybox` Usa la imagen de busybox. Usar busybox es una desicion de diseño, se podria haber usado cualquier otra imagen que contenga netcat, decido usar busybox ya que investigando vi que es muy liviana e incluye netcat.
+5. `sh -c "..."` Ejecuta el comando que le sigue dentro del contenedor temporal
+6. `echo -n '${MSG}' | nc ${SERVER_NAME} ${PORT}` Envía el mensaje usando netcat para conectarse al servidor en su puerto
+
+De esta manera se logra capturar la salida en la variable `RESPONSE` y luego se checkea contra el mensaje que fue enviado, si es correcto se printea el `result: success` y de lo contrario el `result: fail`.
