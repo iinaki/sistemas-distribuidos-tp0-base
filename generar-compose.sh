@@ -23,6 +23,8 @@ services:
       - LOGGING_LEVEL=DEBUG
     networks:
       - testing_net
+    volumes:
+      - ./server/config.ini:/config.ini
 EOF
 
 for i in $(seq 1 "$CLIENT_COUNT"); do
@@ -38,6 +40,8 @@ for i in $(seq 1 "$CLIENT_COUNT"); do
       - testing_net
     depends_on:
       - server
+    volumes:
+      - ./client/config.yaml:/config.yaml
 EOF
 done
 
