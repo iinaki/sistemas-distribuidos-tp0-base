@@ -190,3 +190,23 @@ El ejercicio nos pide un script de bash que genere un compose para N clientes. P
 5. Para terminar escribiendo el compose nos falta la ultima seccion que es donde se define la parte de redes. Esta última también es comun al compose de ejemplo asi que lo agregamos de esa manera.
 
 De esta manera generamos un script que forma un archivo yaml que instancia la cantidad de clientes que queramos, con sus respectivos servicios y completamente funcional como se puede ver haciendo ejecutando los makes o corriendo los tests.
+
+# Resolucion del ejercicio 2
+
+En este ejercicio se pide encontrar una manera de hacer que los archivos de configuracion del server y el client (`config.ini` y `config.yaml`) puedan ser inyectados dentro del container, persistiendo asi por fuera de la imagen.
+
+Personalmente este fue un desafio para mi porque nunca habia trabajado con volumes, por lo que tuve que investigar bastante para entender como funcionan. Mi pequeño resumen: los volumenes son el mecanismo que tenemos para almacenar datos de forma persistente en los contenedores, de forma que si un contenedor se elimina no se pierdan los datos, ya que existen independientemente de los contenedores. Ademas cualquier cambio en estos archivos se van a reflejar en el contenedor sin tener que buildear nuevamente. 
+
+Entonces los cambios realizados fueron realmente muy pequeños, le agregamos simplemente un par de lineas al generador del compose en el server y en el cliente de manera de poder montar respectivamente cada archivo de config. 
+- En el server agregamos:
+    ```yaml
+    volumes:
+        - ./server/config.ini:/config.ini
+    ```
+- En el cliente agregamos:
+    ```yaml
+    volumes:
+        - ./client/config.yaml:/config.yaml
+    ```
+
+Y de esta manera logramos montar los archivos de configuracion que tenemos locales dentro de cada contenedor.
