@@ -127,7 +127,7 @@ func main() {
 	case <-clientDone:
 		log.Infof("action: client_finished | result: success")
 	case sig := <-signalChannel:
-		log.Infof("action: receive_signal | signal: %v | result: shutting_down", sig)
+		log.Infof("action: receive_signal | result: in_progress | signal: %v ", sig)
 		client.Stop()
 		log.Infof("action: shutdown_client | result: success")
 	}

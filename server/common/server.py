@@ -22,8 +22,16 @@ class Server:
         # TODO: Modify this program to handle signal to graceful shutdown
         # the server
         while self._running:
-            client_sock = self.__accept_new_connection()
-            self.__handle_client_connection(client_sock)
+            try:
+                client_sock = self.__accept_new_connection()
+                if client_sock:
+                    self.__handle_client_connection(client_sock)
+            except OSError as e:
+                if self._running:
+                    logging.error(
+                        f"action: accept_connection | result: fail | error: {e}"
+                    )
+                break
 
     def __handle_client_connection(self, client_sock):
         """
@@ -42,8 +50,13 @@ class Server:
         except OSError as e:
             logging.error("action: receive_message | result: fail | error: {e}")
         finally:
-            client_sock.close()
-            logging.debug("action: close_client_connection | result: success")
+            try:
+                client_sock.close()
+                logging.debug("action: close_client_connection | result: success")
+            except OSError as e:
+                logging.error(
+                    f"action: close_client_connection | result: fail | error: {e}"
+                )
 
     def __accept_new_connection(self):
         """
@@ -55,13 +68,23 @@ class Server:
 
         # Connection arrived
         logging.info('action: accept_connections | result: in_progress')
-        c, addr = self._server_socket.accept()
-        logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-        return c
+        try:
+            c, addr = self._server_socket.accept()
+            logging.info(
+                f"action: accept_connections | result: success | ip: {addr[0]}"
+            )
+            return c
+        except OSError as e:
+            if self._running:
+                logging.error(f"action: accept_connections | result: fail | error: {e}")
+            return None
 
     def stop(self):
         logging.info("action: shutdown_server | result: in_progress")
         self._running = False
-        self._server_socket.close()
-        logging.info("action: close_server_socket | result: success")
+        try:
+            self._server_socket.close()
+            logging.info("action: close_server_socket | result: success")
+        except OSError as e:
+            logging.error(f"action: close_server_socket | result: fail | error: {e}")
         logging.info("action: shutdown_server | result: success")
