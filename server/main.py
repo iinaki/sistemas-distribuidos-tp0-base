@@ -54,7 +54,7 @@ def main():
 
     def signal_handler(signum, frame):
         logging.info(
-            f"action: receive_signal | result: fail | signal: {signum}"
+            f"action: receive_signal | result: success | signal: {signum}"
         )
         server.stop()
         sys.exit(0)
