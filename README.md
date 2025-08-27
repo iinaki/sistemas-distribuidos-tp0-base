@@ -227,3 +227,95 @@ Y esto es porque gracias a este comando nos podemos meter en la red de docker y 
 6. `echo -n '${MSG}' | nc ${SERVER_NAME} ${PORT}` Envía el mensaje usando netcat para conectarse al servidor en su puerto
 
 De esta manera se logra capturar la salida en la variable `RESPONSE` y luego se checkea contra el mensaje que fue enviado, si es correcto se printea el `result: success` y de lo contrario el `result: fail`.
+
+# Resolucion del ejercicio 4
+
+Para terminar la aplicacion de forma graceful debemos cerrar todos los file descriptors correctamente antes del fin del proceso principal. 
+
+Por un lado en el cliente, en el main antes teniamos el instanciado del nuevo cliente con su config, de esta manera:
+```go
+   client := common.NewClient(clientConfig)
+   client.StartClientLoop()
+}
+```
+
+Esto lo modificamos un poco agregandole un canal,  al que le puse `signalChannel`, que puede recibir señales del sistema operativo. Con `signal.Notify()` registramos el canal para recibir `SIGTERM` y SIGINT:
+   signalChannel := make(chan os.Signal, 1)
+   signal.Notify(signalChannel, syscall.SIGTERM, syscall.SIGINT)
+
+Luego hacemos que el cliente corra su loop en una Gorutine, esto permite que el cliente tenga su loop corriendo mientras que el hilo principal escucha señales:
+
+go func() {
+       client.StartClientLoop()
+       clientDone <- true
+   }()
+
+Luego para terminar con el main hacemos un select que va a escuchar las señales SIGTERM o SIGINT, y también va a estar atento por si el cliente termina. Si el flag de clientDone se pone en true, entonces se loguea action: client_finished | result: success y termina el programa correctamente. Y por otro lado si se recibe SIGTERM o SIGINT se loguea la señal recibida, luego se llama a client.Stop() y por ultimo loguea el shutdown: action: shutdown_client | result: success.
+ 
+select {
+   case <-clientDone:
+       log.Infof("action: client_finished | result: success")
+   case sig := <-signalChannel:
+       log.Infof("action: receive_signal | result: in_progress | signal: %v ", sig)
+       client.Stop()
+       log.Infof("action: shutdown_client | result: success")
+   }
+}
+
+Al cliente lo primero que le agregamos es un flag de running para tener el estado de si el cliente debe seguir ejecutandose. Agrego las funciones closeConnection y Stop. Stop se define como una funcion publica del cliente y es la que llama el main si se recibe SIGTERM o SIGINT. Por debajo Stop llama a closeConnection y esta lo que hace es hacerle un Close() a la conexion con el server, si es que esta no es nil. La funcion StartClientLoop() crea una conexion con el server por cada iteracion a traves de createClientSocket(), luego de enviar el mensaje al server le agrego un llamado a closeConnection() para cerrar todas las conexiones correctamente. El codigo nuevo entonces se ve asi:
+
+func (c *Client) closeConnection() {
+   if c.conn != nil {
+       err := c.conn.Close()
+       if err != nil {
+           log.Errorf("action: close_connection | result: fail | client_id: %v | error: %v",
+               c.config.ID,
+               err,
+           )
+       } else {
+           log.Debugf("action: close_connection | result: success | client_id: %v", c.config.ID)
+       }
+       c.conn = nil
+   }
+}
+
+
+func (c *Client) Stop() {
+   log.Infof("action: shutdown_client | result: in_progress | client_id: %v", c.config.ID)
+   c.running = false
+   c.closeConnection()
+   log.Infof("action: shutdown_client | result: success | client_id: %v", c.config.ID)
+}
+
+
+
+Ahora para el main del server vamos a hacer algo muy parecido a como hicimos en el cliente, creamos un signal handler que va a llamar a server.stop() si es que se recibe la señal esperada:
+
+
+def signal_handler(signum, frame):
+       logging.info(
+           f"action: receive_signal | result: in_progress | signal: {signum} "
+       )
+       server.stop()
+       sys.exit(0)
+
+
+ signal.signal(signal.SIGTERM, signal_handler)
+ signal.signal(signal.SIGINT, signal_handler)
+
+
+ server.run()
+
+Luego en el código específico del server, similar a como hicimos con el client, por un lado le agregamos el flag self._running = True y por otro lado agregamos la funcion stop, que pone el flag de running en False y llama al close del socket del server:
+   def stop(self):
+       logging.info("action: shutdown_server | result: in_progress")
+       self._running = False
+       self._server_socket.close()
+       logging.info("action: close_server_socket | result: success")
+       logging.info("action: shutdown_server | result: success")
+
+
+action: shutdown_server/client | result: in_progress
+action: close_server_socket | result: success
+action: close_client_connection | result: success
+action: shutdown_server/client | result: success
