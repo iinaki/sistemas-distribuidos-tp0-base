@@ -1,12 +1,16 @@
 import socket
 import logging
 
+from server.common.messages import BetResponseMessage
+from .protocol import Protocol, MessageType, BetMessage
+from .utils import Bet, store_bets
+
 
 class Server:
     def __init__(self, port, listen_backlog):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server_socket.bind(('', port))
+        self._server_socket.bind(("", port))
         self._server_socket.listen(listen_backlog)
         self._running = True
 
@@ -41,14 +45,39 @@ class Server:
         client socket will also be closed
         """
         try:
-            # TODO: Modify the receive to avoid short-reads
-            msg = client_sock.recv(1024).rstrip().decode('utf-8')
             addr = client_sock.getpeername()
-            logging.info(f'action: receive_message | result: success | ip: {addr[0]} | msg: {msg}')
-            # TODO: Modify the send to avoid short-writes
-            client_sock.send("{}\n".format(msg).encode('utf-8'))
-        except OSError as e:
-            logging.error("action: receive_message | result: fail | error: {e}")
+            logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
+
+            message = Protocol.receive_message(client_sock)
+            if message is None:
+                logging.error(
+                    f"action: receive_bet | result: fail | ip: {addr[0]} | error: no_message_received"
+                )
+                return
+
+            try:
+                bet = BetMessage.from_bytes(message)
+            except Exception as e:
+                Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+                logging.error(f"action: receive_bet | result: fail | error: {e}")
+                return
+
+            store_bets([bet])
+
+            logging.info(
+                f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
+            )
+
+            Protocol.send_message(client_sock, BetResponseMessage.to_bytes(True))
+
+            logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
+
+        except Exception as e:
+            logging.error(f"action: handle_bet | result: fail | error: {e}")
+            try:
+                Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+            except:
+                pass
         finally:
             try:
                 client_sock.close()
@@ -67,7 +96,7 @@ class Server:
         """
 
         # Connection arrived
-        logging.info('action: accept_connections | result: in_progress')
+        logging.info("action: accept_connections | result: in_progress")
         try:
             c, addr = self._server_socket.accept()
             logging.info(

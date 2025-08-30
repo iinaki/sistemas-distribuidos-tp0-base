@@ -1,49 +1,33 @@
-import json
 import struct
 import socket
 import logging
 from typing import Dict, Any, Optional
 
+HEADER_LEN = 4
 
 class Protocol:
     @staticmethod
-    def send_message(sock: socket.socket, message: Dict[str, Any]) -> None:
+    def send_message(sock: socket.socket, message_bytes: bytes) -> None:
         try:
-            json_data = json.dumps(message).encode("utf-8")
-
-            header = struct.pack("!I", len(json_data))
-
-            full_message = header + json_data
-
+            header = struct.pack("!I", len(message_bytes))
+            full_message = header + message_bytes
             Protocol._send_exact(sock, full_message)
-
-            logging.debug(
-                f"action: send_message | result: success | bytes_sent: {bytes_sent}"
-            )
 
         except Exception as e:
             logging.error(f"action: send_message | result: fail | error: {e}")
             raise
 
     @staticmethod
-    def receive_message(sock: socket.socket) -> Optional[Dict[str, Any]]:
+    def receive_message(sock: socket.socket) -> Optional[bytes]:
         try:
-            header_data = Protocol._receive_exact(sock, 4)
-            if not header_data:
+            header = Protocol._receive_exact(sock, HEADER_LEN)
+            if not header:
                 return None
 
-            message_length = struct.unpack("!I", header_data)[0]
+            message_length = struct.unpack("!I", header)[0]
+            message_bytes = Protocol._receive_exact(sock, message_length)
 
-            json_data = Protocol._receive_exact(sock, message_length)
-            if not json_data:
-                return None
-
-            message = json.loads(json_data.decode("utf-8"))
-
-            logging.debug(
-                f"action: receive_message | result: success | message_length: {message_length}"
-            )
-            return message
+            return message_bytes
 
         except Exception as e:
             logging.error(f"action: receive_message | result: fail | error: {e}")
@@ -61,9 +45,14 @@ class Protocol:
 
     @staticmethod
     def _send_exact(sock: socket.socket, full_message: bytes) -> None:
+        total_len = len(full_message)
         bytes_sent = 0
-        while bytes_sent < len(full_message):
+        while bytes_sent < total_len:
             sent = sock.send(full_message[bytes_sent:])
             if sent == 0:
                 raise ConnectionError("Socket connection broken")
             bytes_sent += sent
+
+            logging.debug(
+                f"action: send_message | result: success | bytes_sent: {bytes_sent}"
+            )
