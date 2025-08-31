@@ -10,10 +10,18 @@ const (
 	ERROR_STR   = "error"
 )
 
-func CreateBetMessage(agencyID, nombre, apellido, documento, nacimiento, numero string) []byte {
-	message := fmt.Sprintf("AGENCY_ID=%s,NOMBRE=%s,APELLIDO=%s,DOCUMENTO=%s,NACIMIENTO=%s,NUMERO=%s",
-		agencyID, nombre, apellido, documento, nacimiento, numero)
-	return []byte(message)
+type Bet struct {
+	AgencyID   string
+	Nombre     string
+	Apellido   string
+	Documento  string
+	Nacimiento string
+	Numero     string
+}
+
+func (b *Bet) toBytes() []byte {
+	return []byte(fmt.Sprintf("AGENCY_ID=%s,NOMBRE=%s,APELLIDO=%s,DOCUMENTO=%s,NACIMIENTO=%s,NUMERO=%s",
+		b.AgencyID, b.Nombre, b.Apellido, b.Documento, b.Nacimiento, b.Numero))
 }
 
 func ParseBetResponse(responseBytes []byte) (bool, error) {

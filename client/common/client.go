@@ -1,7 +1,11 @@
 package common
 
 import (
+	"encoding/binary"
+	"encoding/csv"
+	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"github.com/op/go-logging"
@@ -11,15 +15,11 @@ var log = logging.MustGetLogger("log")
 
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
-	ID            string
-	ServerAddress string
-	LoopAmount    int
-	LoopPeriod    time.Duration
-	Nombre        string
-	Apellido      string
-	Documento     string
-	Nacimiento    string
-	Numero        string
+	ID             string
+	ServerAddress  string
+	LoopAmount     int
+	LoopPeriod     time.Duration
+	BatchMaxAmount int
 }
 
 // Client Entity that encapsulates how
@@ -39,6 +39,74 @@ func NewClient(config ClientConfig) *Client {
 	return client
 }
 
+func (c *Client) loadBetsFromCSV() ([]Bet, error) {
+	file, err := os.Open("/agency.csv")
+	if err != nil {
+		return nil, fmt.Errorf("error opening CSV file: %v", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("error reading CSV file: %v", err)
+	}
+
+	var bets []Bet
+	for _, record := range records {
+		if len(record) != 5 {
+			log.Errorf("invalid CSV record: %v", record)
+			continue
+		}
+		bet := Bet{
+			AgencyID:   c.config.ID,
+			Nombre:     record[0],
+			Apellido:   record[1],
+			Documento:  record[2],
+			Nacimiento: record[3],
+			Numero:     record[4],
+		}
+		bets = append(bets, bet)
+	}
+
+	return bets, nil
+}
+
+// Creamos Bet: len + is_last_bet + betmessage
+func (c *Client) createBetMessage(bet Bet, isLastBet bool) []byte {
+	betMessageBytes := bet.toBytes()
+
+	header := make([]byte, 5)
+	binary.BigEndian.PutUint32(header, uint32(len(betMessageBytes)))
+
+	if isLastBet {
+		header[4] = 1
+	} else {
+		header[4] = 0
+	}
+
+	result := make([]byte, 0, len(header)+len(betMessageBytes))
+	result = append(result, header...)
+	result = append(result, betMessageBytes...)
+
+	return result
+}
+
+func (c *Client) SendBatch(protocol *Protocol, bets []Bet) error {
+	var batchMessage []byte
+
+	for i, bet := range bets {
+		isLastBet := (i == len(bets)-1)
+		betMessage := c.createBetMessage(bet, isLastBet)
+		batchMessage = append(batchMessage, betMessage...)
+	}
+
+	log.Debugf("action: send_batch | result: in_progress | client_id: %v | batch_size: %d | total_bytes: %d",
+		c.config.ID, len(bets), len(batchMessage))
+
+	return protocol.SendMessage(c.conn, batchMessage)
+}
+
 // CreateClientSocket Initializes client socket. In case of
 // failure, error is printed in stdout/stderr and error is returned
 func (c *Client) createClientSocket() error {
@@ -55,79 +123,77 @@ func (c *Client) createClientSocket() error {
 	return nil
 }
 
-// StartClientLoop Send Bet messages to the server
+// StartClientLoop: Loads bets from CSV and sends them in batches to the server
 func (c *Client) StartClientLoop() {
-	protocol := NewProtocol()
+	bets, err := c.loadBetsFromCSV()
+	if err != nil {
+		log.Errorf("action: load_bets | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
 
-	for msgID := 1; msgID <= c.config.LoopAmount && c.running; msgID++ {
+	log.Infof("action: load_bets | result: success | client_id: %v | total_bets: %d", c.config.ID, len(bets))
+
+	protocol := NewProtocol()
+	batchCount := 0
+
+	for i := 0; i < len(bets) && c.running; i += c.config.BatchMaxAmount {
+		batchCount++
+
+		end := i + c.config.BatchMaxAmount
+		if end > len(bets) {
+			end = len(bets)
+		}
+
+		batch := bets[i:end]
+
 		err := c.createClientSocket()
 		if err != nil {
 			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
+				c.config.ID, err)
 			return
 		}
 
-		betMessageBytes := CreateBetMessage(
-			c.config.ID,
-			c.config.Nombre,
-			c.config.Apellido,
-			c.config.Documento,
-			c.config.Nacimiento,
-			c.config.Numero,
-		)
-
-		err = protocol.SendMessage(c.conn, betMessageBytes)
+		err = c.SendBatch(protocol, batch)
 		if err != nil {
-			log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
+			log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
+				c.config.ID, batchCount, err)
 			c.closeConnection()
 			return
 		}
 
 		responseBytes, err := protocol.ReceiveMessage(c.conn)
 		if err != nil {
-			log.Errorf("action: receive_response | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
+			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: %v",
+				c.config.ID, batchCount, err)
 			c.closeConnection()
 			return
 		}
 
 		success, err := ParseBetResponse(responseBytes)
 		if err != nil {
-			log.Errorf("action: parse_response | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
+			log.Errorf("action: parse_response | result: fail | client_id: %v | batch_id: %d | error: %v",
+				c.config.ID, batchCount, err)
 			c.closeConnection()
 			return
 		}
 
 		if success {
-			log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %s",
-				c.config.Documento,
-				c.config.Numero,
-			)
+			log.Infof("action: apuesta_enviada | result: success | client_id: %v | batch_id: %d | cantidad: %d",
+				c.config.ID, batchCount, len(batch))
 		} else {
-			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | error: server_returned_error",
-				c.config.ID,
-			)
+			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
+				c.config.ID, batchCount, len(batch))
 		}
 
 		c.closeConnection()
 
 		// Wait a time between sending one message and the next one
-		if msgID < c.config.LoopAmount && c.running {
+		if end < len(bets) && c.running {
 			time.Sleep(c.config.LoopPeriod)
 		}
 	}
 
-	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+	log.Infof("action: loop_finished | result: success | client_id: %v | total_batches: %d", c.config.ID, batchCount)
 }
 
 func (c *Client) closeConnection() {
