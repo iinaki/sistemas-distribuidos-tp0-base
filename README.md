@@ -332,3 +332,139 @@ Por ultimo, agregue nuevas acciones a los logs:
 - `action: close_client_connection`
 - `action: shutdown_client`
 - `action: receive_signal`
+
+# Resolucion del ejercicio 5
+
+## 1. Definir el protocolo
+
+Encarando el ejercicio lo primero que trate de hacer es definir el protocolo, sin tener en cuenta temas de la lógica de negocio específicas del caso de la Lotería, me pareció importante tener bien definido tanto del lado del server como del lado del cliente la forma en que la comunicación se lleva a cabo, para luego poder concentrarnos en implementar los mensajes específicos que pide el problema. 
+Para los ejemplos específicos voy a mostrar el código del lado del servidor, Python, pero esto es análogo en Go. 
+Nos enfocamos entonces en como poder enviar y recibir información. Vamos a aprovechar que en las clases tanto del server como del client ya tenemos definido los sockets como streams (es decir que usan TCP) para aprovechar la garantía de la entrega de los mensajes en orden y sin pérdidas.
+
+Ya tenemos definido entonces que vamos a estar usando TCP para la comunicación, falta entonces definir cómo vamos a parsear los mensajes. Esto se puede hacer de muchas maneras, yo acá elijo ir por un camino simple, pero que me da mucho lugar a poder ser extensible con la creación de los diferentes tipos de mensajes: vamos a definir que el payload entero va a estar compuesto por un header + los datos del mensaje. 
+1. El header por ahora va a ser de un tamaño fijo de 4 bytes y lo único que va a representar es el largo del campo de datos que le sigue.
+2. Los datos del mensaje van a estar todos serializados dentro de un string, por ejemplo algo asi puede ser un mensaje bet: `"AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..."`. El formato de este mensaje va a ser siempre un string con estos campos, cada nombre del campo en mayúscula, seguido por un signo de igual y terminado por una coma. De esta manera es muy simple crear el mensaje del lado del cliente y serializarlo a bytes, y luego parsearlo del lado del servidor. De todas maneras, la capa del protocolo no se va a preocupar por el formato del string en si, sino que se va a ocupar de leer el string entero del stream y pasarlo a la capa superior. De esta manera le delegamos totalmente la responsabilidad a la capa del server y del cliente de crear los mensajes de manera correspondiente, y la capa de comunicación solo se concentra en enviar y recibir el mensaje por la red.
+
+![alt text](img/data_format1.png)
+
+Cuando recibimos un mensaje entonces lo que hacemos es leer el tamaño del header (4 bytes) para obtener el largo siguiente, y luego seguimos leyendo con esta info para obtener el mensaje completo. Surge acá un caso borde que plantea la consigna: cómo evitar un short read. Esto es básicamente cuando haces un read pero quedaron todavía bytes del mensaje por leer, no se llegó a leer toda la información. Para zafar de esto implementamos un wrapper del método base `sock.recv` y le ponemos `_receive_exact`. Esta función recibe el largo a leer del stream y hacemos un while que llame a recv hasta terminar de recibir todos los bytes pedidos. 
+
+```py
+def _receive_exact(sock: socket.socket, num_bytes: int) -> Optional[bytes]:
+    data = b""
+    while len(data) < num_bytes:
+        chunk = sock.recv(num_bytes - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
+```
+
+Para enviar mensajes vamos a recibir de la capa de arriba el mensaje ya en bytes que queremos enviar, por lo cual lo primero que vamos a hacer es obtener su largo para asi obtener el header. Formamos el mensaje entonces haciendo `header bytes + message bytes` y lo enviamos a través de la red. De la misma manera en que antes podíamos llegar a tener un short read acá podemos encontrarnos con un short write, esto es escribir en el stream y que no se lleguen a escribir todos los bytes que queremos, vamos a crear entonces el método `_send_exact` con el que nos vamos a asegurar que se van a escribir en el stream todos los bytes que queremos. Obtenemos el largo total del mensaje y escribimos en el stream hasta que estemos seguros que todos los bytes fueron enviados.
+
+```py
+def _send_exact(sock: socket.socket, full_message: bytes) -> None:
+    total_len = len(full_message)
+    bytes_sent = 0
+    while bytes_sent < total_len:
+        sent = sock.send(full_message[bytes_sent:])
+        if sent == 0:
+            raise ConnectionError("Socket connection broken")
+        bytes_sent += sent
+
+
+        logging.debug(
+            f"action: send_message | result: success | bytes_sent: {bytes_sent}"
+        )
+```
+
+Termina así la parte del ejercicio de definir la forma de comunicación y nos podemos centrar en crear los mensajes específicos para nuestro problema.
+
+## 2. Definir los mensajes
+
+Para pensar en qué mensajes necesitamos para poder completar la comunicacion. Para eso analizamos el flow que tiene que poder ocurrir:
+1. Conexión establecida entre Cliente N y Server.
+2. Cliente envía apuesta a server con: agency id, nombre, apellido, DNI, nacimiento, numero apostado.
+3. Server recibe correctamente, valida que apuesta es válida, acá hay dos casos:
+    1. Si la apuesta es válida: almacenar apuesta y responder a cliente que salio todo OK
+    2. Si la apuesta es inválida: responder con error de apuesta no válida.
+4. Cerramos conexion
+
+Para ver mejor el flujo cree este mermaid:
+
+![alt text](img/mermaid.png)
+
+Vamos a tener entonces dos mensajes: el mensaje `Bet` que el cliente envía al servidor, y el mensaje `BetResponse` que envía el server al cliente. 
+Nos queda entonces la última decisión de diseño de este ejercicio: cómo haremos para enviar y recibir los mensajes, como será su formato y cómo será su serialización y parseo. Ya que tanto server como client esperan recibir un solo tipo de mensaje en particular las puertas están abiertas para que decidamos mandar los mensajes de la manera que querramos y hay muchas opciones diferentes que son todas válidas.
+Al mensaje que el cliente le envía al server le vamos a decir `BetMessage` y este siempre va a ser enviado por la red como un string de la forma: `"AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..."`, con cada nombre del campo en mayúsculas, seguido por un signo de igual y terminado por una coma. Esta opción es simple y nos permite serializar a bytes y deserializar a string de manera muy sencilla, y lo mismo puedo decir del parseo de cada campo, por ejemplo así es como se ve el `from_bytes` en el servidor:
+
+```py
+FIELDS = ["AGENCY_ID", "NOMBRE", "APELLIDO", "DOCUMENTO", "NACIMIENTO", "NUMERO"]
+
+
+class BetMessage:
+   # El formato de un mensaje Bet va a ser siempre un string de la forma: "AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..."
+   # Todos los campos van a ser strings que vienen en bytes (utf8)
+   @staticmethod
+   def from_bytes(b: bytes) -> "Bet":
+       s = b.decode("utf-8")
+
+
+       parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+       kv: Dict[str, str] = {}
+       for p in parts:
+           if "=" not in p:
+               continue
+           k, v = p.split("=", 1)
+           k = k.strip().upper()
+           v = v.strip()
+           kv[k] = v
+
+
+       for req in FIELDS:
+           if req not in kv:
+               raise ValueError(f"missing field {req}")
+
+
+       bet = Bet(
+           kv["AGENCY_ID"],
+           kv["NOMBRE"],
+           kv["APELLIDO"],
+           kv["DOCUMENTO"],
+           kv["NACIMIENTO"],
+           kv["NUMERO"],
+       )
+       return bet
+```
+
+Podemos ver que si el parseo de los datos sale bien entonces el método devuelve el objeto Bet ya creado y de lo contrario hace raise de un error, el handler de la conexión con el cliente maneja esto de la siguiente manera: si hay un error le envia mensaje al cliente de que fallo, y si sale bien hace finalmente el llamado a `store_bets([bet])`.
+
+```py
+try:
+   bet = BetMessage.from_bytes(message)
+except Exception as e:
+   Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+   logging.error(f"action: receive_bet | result: fail | error: {e}")
+   return
+
+store_bets([bet])
+
+Protocol.send_message(client_sock, BetResponseMessage.to_bytes(True))
+```
+
+Por último al segundo mensaje le llamamos `BetResponse`, y es en el cual el servidor le confirma al cliente que la `Bet` ha sido guardada con éxito o que fue esta tuvo algún error. Como estamos mandando strings decido que acá podemos mandar un string "success" en caso de éxito o un string "error" si algo sale mal. El cliente entonces recibe el mensaje y actúa de manera diferente según este, que por ahora es un log.
+
+```py
+SUCCESS_STR = "success"
+ERROR_STR = "error"
+
+
+class BetResponseMessage:
+   @staticmethod
+   def to_bytes(success: bool) -> bytes:
+       if success:
+           return SUCCESS_STR.encode("utf-8")
+       return ERROR_STR.encode("utf-8")
+```
+
+Termina asi el ejercicio 5, solo queda ajustar cada handler (del client y el servidor) para que maneje estos mensajes y termine de manera correcta.
