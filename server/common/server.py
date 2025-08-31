@@ -227,8 +227,8 @@ class Server:
             )
 
             if not self._lottery_executed:
-                logging.warning(
-                    "action: winners_request | result: lottery_not_executed_yet"
+                logging.info(
+                    "action: winners_request | result: in_progress"
                 )
                 empty_response = WinnersResponseMessage.to_bytes([])
                 Protocol.send_message(

@@ -299,7 +299,7 @@ func (c *Client) requestWinners(protocol *Protocol) error {
 		}
 
 		if messageType == MsgTypeLotteryNotReady {
-			log.Infof("action: lottery_not_ready | result: success | client_id: %s", c.config.ID)
+			log.Infof("action: lottery_not_ready | result: in_progress | client_id: %s", c.config.ID)
 			c.closeConnection()
 			time.Sleep(100 * time.Millisecond)
 			continue
