@@ -468,3 +468,139 @@ class BetResponseMessage:
 ```
 
 Termina asi el ejercicio 5, solo queda ajustar cada handler (del client y el servidor) para que maneje estos mensajes y termine de manera correcta.
+
+# Resolucion del ejercicio 6
+
+Lo primero que quiero hacer es poder inyectar los archivos correspondientes a cada agency, podemos encontrar cada uno dentro de `.data/dataset/agency-{n}.csv` luego de unzipear el `dataset.zip`. En el ejercicio anterior habíamos definido en el docker compose como variables de entorno los datos relacionados a una sola batch por cada cliente y esto estaba bien porque enviabamos solo una apuesta por cada cliente, ahora que tenemos que enviar muchas esto va a tener que cambiar. Empiezo removiendo estas variables de entorno y agregando un volume, cargando cada dataset correspondiente para cada cliente, en el `generar-compose.sh` se ve asi:
+
+```sh
+for i in $(seq 1 "$CLIENT_COUNT"); do
+   cat >> "$OUTPUT_FILE" <<EOF
+ client${i}:
+   container_name: client${i}
+   image: client:latest
+   entrypoint: /client
+   environment:
+     - CLI_ID=${i}
+     - CLI_LOG_LEVEL=DEBUG
+   networks:
+     - testing_net
+   depends_on:
+     - server
+   volumes:
+     - ./client/config.yaml:/config.yaml
+     - ./.data/agency-${i}.csv:/agency.csv
+EOF
+done
+```
+
+Notese que moví un directorio para arriba los csvs de las agency, ya que en los tests de la catedra se testea que estos archivos se encuentren en `./data`, y no en `.data/dataset/`.
+
+De esta manera entonces logramos cargar cada dataset dentro de cada cliente y la “magia” de esto es que ahora cada cliente va a poder acceder a su dataset haciendo `file, err := os.Open("/agency.csv")` . 
+Aprovechando esto podemos hacer una función auxiliar tipo `loadBetsFromCSV` y agregarla al inicio del client loop, de esta manera apenas empieza la lógica del cliente, abrimos el CSV y obtenemos todas las bets parseadas. 
+
+Llegamos entonces al punto clave que propone el ejercicio: como hacemos para modificar el protocolo de tal manera que no se manden bets de manera individual, sino que se manden muchas bets a la vez. Mi decisión aca va a ser la siguiente: antes mandábamos el mensaje de bet con el formato: `“len + AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=...”` esto lo vamos a reemplazar por agregar un campo más al header que indique si esa bet es la última del batch o no, esto puede ser un byte que sea un 0 (no es la última bet) o un 1 (es la última bet). De esta manera un nuevo mensaje de bet se puede ver de la manera:
+`“largo total del mensaje + len + 0 + AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..., len + 0 + AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..., len + 1 + AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=...”`
+De nuevo, hay muchas maneras de resolver este problema, a mi me gusta esta forma porque no implica cambios en el protocolo, solo en el cliente vamos a agregar una función `SendBatch` que cree el batch de manera correcta con el string bien formado con todas las bets en una sola batch y luego se lo pase a la capa de comunicación (`SendMessage`) para enviar el mensaje en bytes y luego la capa de comunicacion le agrega el largo total. Podemos ver entonces que en el código solo vamos a cambiar la capa del cliente y no tocamos la del protocolo, y esto se ve asi:
+
+```go
+// Creamos Bet: len + is_last_bet + betmessage
+func (c *Client) createBetMessage(bet Bet, isLastBet bool) []byte {
+   betMessageBytes := bet.toBytes()
+
+
+   header := make([]byte, 5)
+   binary.BigEndian.PutUint32(header, uint32(len(betMessageBytes)))
+
+
+   if isLastBet {
+       header[4] = 1
+   } else {
+       header[4] = 0
+   }
+
+
+   result := make([]byte, 0, len(header)+len(betMessageBytes))
+   result = append(result, header...)
+   result = append(result, betMessageBytes...)
+
+
+   return result
+}
+
+
+func (c *Client) SendBatch(protocol *Protocol, bets []Bet) error {
+   var batchMessage []byte
+
+
+   for i, bet := range bets {
+       isLastBet := (i == len(bets)-1)
+       betMessage := c.createBetMessage(bet, isLastBet)
+       batchMessage = append(batchMessage, betMessage...)
+   }
+
+
+   log.Debugf("action: send_batch | result: in_progress | client_id: %v | batch_size: %d | total_bytes: %d",
+       c.config.ID, len(bets), len(batchMessage))
+
+
+   return protocol.SendMessage(c.conn, batchMessage)
+}
+```
+
+Me parece este un indicador de que en el ejercicio 5 definimos un buen protocolo que es facil de extender por las capas de arriba.
+
+Luego del lado del servidor pasa algo muy parecido, no vamos a tocar el código del protocolo, sino que pasamos de recibir una bet individual en los bytes que recibimos a recibir un batch entero, de esta manera vamos a parsear cada batch comprobando que esta está formada de manera correcta y si todo sale bien vamos a terminar guardando todas las bets en un mismo llamado a store_bets(batch_bets). El handling de la conexion con el cliente entonces se va a ver asi:
+
+```py
+def __handle_client_connection(self, client_sock):
+    """
+    Read message from a specific client socket and closes the socket
+
+    If a problem arises in the communication with the client, the
+    client socket will also be closed
+    """
+    try:
+        addr = client_sock.getpeername()
+        logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
+
+        batch_message_bytes = Protocol.receive_message(client_sock)
+        if batch_message_bytes is None:
+            logging.error(
+                f"action: receive_batch | result: fail | ip: {addr[0]} | error: no_message_received"
+            )
+            return
+
+        try:
+            batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
+        except Exception as e:
+            logging.error(f"action: parse_bet | result: fail | error: {e}")
+            Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+            return
+
+        bets_len = len(batch_bets)
+
+        try:
+            Server.process_successful_batch_bets(batch_bets, client_sock, bets_len)
+        except Exception as e:
+            Server.process_failed_batch_bets(bets_len, client_sock, e)
+            return
+
+        logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
+
+    except Exception as e:
+        logging.error(f"action: handle_bet | result: fail | error: {e}")
+        try:
+            Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+        except:
+            pass
+    finally:
+        try:
+            client_sock.close()
+            logging.debug("action: close_client_connection | result: success")
+        except OSError as e:
+            logging.error(
+                f"action: close_client_connection | result: fail | error: {e}"
+            )
+```
+
