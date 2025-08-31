@@ -129,9 +129,11 @@ func main() {
 	select {
 	case <-clientDone:
 		log.Infof("action: client_finished | result: success")
+		log.Infof("action: exit | result: success")
 	case sig := <-signalChannel:
 		log.Infof("action: receive_signal | result: in_progress | signal: %v ", sig)
 		client.Stop()
 		log.Infof("action: shutdown_client | result: success")
+		log.Infof("action: exit | result: success")
 	}
 }
