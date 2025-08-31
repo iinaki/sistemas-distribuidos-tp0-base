@@ -180,6 +180,7 @@ func (c *Client) StartClientLoop() {
 		if success {
 			log.Infof("action: apuesta_enviada | result: success | client_id: %v | batch_id: %d | cantidad: %d",
 				c.config.ID, batchCount, len(batch))
+			log.Infof("action: apuesta_recibida | result: success | cantidad: %d", len(batch))
 		} else {
 			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
 				c.config.ID, batchCount, len(batch))
