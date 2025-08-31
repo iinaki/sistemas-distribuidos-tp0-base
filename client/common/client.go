@@ -1,8 +1,6 @@
 package common
 
 import (
-	"bufio"
-	"fmt"
 	"net"
 	"time"
 
@@ -17,6 +15,11 @@ type ClientConfig struct {
 	ServerAddress string
 	LoopAmount    int
 	LoopPeriod    time.Duration
+	Nombre        string
+	Apellido      string
+	Documento     string
+	Nacimiento    string
+	Numero        string
 }
 
 // Client Entity that encapsulates how
@@ -37,8 +40,7 @@ func NewClient(config ClientConfig) *Client {
 }
 
 // CreateClientSocket Initializes client socket. In case of
-// failure, error is printed in stdout/stderr and exit 1
-// is returned
+// failure, error is printed in stdout/stderr and error is returned
 func (c *Client) createClientSocket() error {
 	conn, err := net.Dial("tcp", c.config.ServerAddress)
 	if err != nil {
@@ -47,17 +49,17 @@ func (c *Client) createClientSocket() error {
 			c.config.ID,
 			err,
 		)
+		return err
 	}
 	c.conn = conn
 	return nil
 }
 
-// StartClientLoop Send messages to the client until some time threshold is met
+// StartClientLoop Send Bet messages to the server
 func (c *Client) StartClientLoop() {
-	// There is an autoincremental msgID to identify every message sent
-	// Messages if the message amount threshold has not been surpassed
+	protocol := NewProtocol()
+
 	for msgID := 1; msgID <= c.config.LoopAmount && c.running; msgID++ {
-		// Create the connection the server in every loop iteration. Send an
 		err := c.createClientSocket()
 		if err != nil {
 			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
@@ -67,33 +69,64 @@ func (c *Client) StartClientLoop() {
 			return
 		}
 
-		// TODO: Modify the send to avoid short-write
-		fmt.Fprintf(
-			c.conn,
-			"[CLIENT %v] Message N°%v\n",
+		betMessageBytes := CreateBetMessage(
 			c.config.ID,
-			msgID,
+			c.config.Nombre,
+			c.config.Apellido,
+			c.config.Documento,
+			c.config.Nacimiento,
+			c.config.Numero,
 		)
-		msg, err := bufio.NewReader(c.conn).ReadString('\n')
-		c.closeConnection()
 
+		err = protocol.SendMessage(c.conn, betMessageBytes)
 		if err != nil {
-			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
+			log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
 				c.config.ID,
 				err,
 			)
+			c.closeConnection()
 			return
 		}
 
-		log.Infof("action: receive_message | result: success | client_id: %v | msg: %v",
-			c.config.ID,
-			msg,
-		)
+		responseBytes, err := protocol.ReceiveMessage(c.conn)
+		if err != nil {
+			log.Errorf("action: receive_response | result: fail | client_id: %v | error: %v",
+				c.config.ID,
+				err,
+			)
+			c.closeConnection()
+			return
+		}
+
+		success, err := ParseBetResponse(responseBytes)
+		if err != nil {
+			log.Errorf("action: parse_response | result: fail | client_id: %v | error: %v",
+				c.config.ID,
+				err,
+			)
+			c.closeConnection()
+			return
+		}
+
+		if success {
+			log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %s",
+				c.config.Documento,
+				c.config.Numero,
+			)
+		} else {
+			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | error: server_returned_error",
+				c.config.ID,
+			)
+		}
+
+		c.closeConnection()
 
 		// Wait a time between sending one message and the next one
-		time.Sleep(c.config.LoopPeriod)
-
+		if msgID < c.config.LoopAmount && c.running {
+			time.Sleep(c.config.LoopPeriod)
+		}
 	}
+
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
