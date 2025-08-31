@@ -3,9 +3,22 @@ import logging
 import struct
 from typing import Optional
 
-from .messages import BetMessage, BetResponseMessage
-from .protocol import Protocol
-from .utils import store_bets, Bet
+from .messages import (
+    BetMessage,
+    BetResponseMessage,
+    FinishedSendingMessage,
+    WinnersRequestMessage,
+    WinnersResponseMessage,
+)
+from .protocol import (
+    Protocol,
+    MSG_TYPE_BET,
+    MSG_TYPE_FINISHED_SENDING,
+    MSG_TYPE_WINNERS_REQUEST,
+    MSG_TYPE_WINNERS_RESPONSE,
+    MSG_TYPE_LOTTERY_NOT_READY,
+)
+from .utils import store_bets, Bet, load_bets, has_won
 
 
 class Server:
@@ -15,6 +28,46 @@ class Server:
         self._server_socket.bind(("", port))
         self._server_socket.listen(listen_backlog)
         self._running = True
+
+        self._agencies_finished = set()
+        self._lottery_executed = False
+        self._winning_number = None
+        self._winners = []
+
+    def _execute_lottery(self):
+        if self._lottery_executed:
+            return
+
+        try:
+            logging.info("action: execute_lottery | result: in_progress")
+
+            all_bets = list(load_bets())
+            logging.info(
+                f"action: load_all_bets | result: success | total_bets: {len(all_bets)}"
+            )
+
+            winners = []
+            for bet in all_bets:
+                if has_won(bet):
+                    winner_info = {
+                        "name": f"{bet.first_name} {bet.last_name}",
+                        "document": bet.document,
+                        "number": bet.number,
+                        "agency": bet.agency,
+                    }
+                    winners.append(winner_info)
+
+            self._winners = winners
+            self._lottery_executed = True
+
+            logging.info(
+                f"action: execute_lottery | result: success | winners_count: {len(winners)}"
+            )
+
+        except Exception as e:
+            logging.error(f"action: execute_lottery | result: fail | error: {e}")
+            # Keep lottery as not executed so it can be retried
+            self._lottery_executed = False
 
     def run(self):
         """
@@ -50,34 +103,35 @@ class Server:
             addr = client_sock.getpeername()
             logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
 
-            batch_message_bytes = Protocol.receive_message(client_sock)
-            if batch_message_bytes is None:
+            message_result = Protocol.receive_message(client_sock)
+            if message_result is None:
                 logging.error(
-                    f"action: receive_batch | result: fail | ip: {addr[0]} | error: no_message_received"
+                    f"action: receive_message | result: fail | ip: {addr[0]} | error: no_message_received"
                 )
                 return
 
-            try:
-                batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
-            except Exception as e:
-                logging.error(f"action: parse_bet | result: fail | error: {e}")
-                Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
-                return
+            message_type, message_bytes = message_result
 
-            bets_len = len(batch_bets)
-
-            try:
-                Server.process_successful_batch_bets(batch_bets, client_sock, bets_len)
-            except Exception as e:
-                Server.process_failed_batch_bets(bets_len, client_sock, e)
-                return
-
-            logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
+            if message_type == MSG_TYPE_BET:
+                self.__handle_bet_message(client_sock, message_bytes, addr)
+            elif message_type == MSG_TYPE_FINISHED_SENDING:
+                self.__handle_finished_sending_message(client_sock, message_bytes, addr)
+            elif message_type == MSG_TYPE_WINNERS_REQUEST:
+                self.__handle_winners_request_message(client_sock, message_bytes, addr)
+            else:
+                logging.error(
+                    f"action: handle_message | result: fail | ip: {addr[0]} | error: unknown_message_type: {message_type}"
+                )
+                Protocol.send_message(
+                    client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
+                )
 
         except Exception as e:
-            logging.error(f"action: handle_bet | result: fail | error: {e}")
+            logging.error(f"action: handle_client | result: fail | error: {e}")
             try:
-                Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+                Protocol.send_message(
+                    client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
+                )
             except:
                 pass
         finally:
@@ -109,6 +163,90 @@ class Server:
             if self._running:
                 logging.error(f"action: accept_connections | result: fail | error: {e}")
             return None
+
+    def __handle_bet_message(self, client_sock, message_bytes, addr):
+        try:
+            batch_bets = Server.parse_batch_bet_message(message_bytes)
+        except Exception as e:
+            logging.error(f"action: parse_bet | result: fail | error: {e}")
+            Protocol.send_message(
+                client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
+            )
+            return
+
+        bets_len = len(batch_bets)
+
+        try:
+            Server.process_successful_batch_bets(batch_bets, client_sock, bets_len)
+        except Exception as e:
+            Server.process_failed_batch_bets(bets_len, client_sock, e)
+            return
+
+        logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
+
+    def __handle_finished_sending_message(self, client_sock, message_bytes, addr):
+        try:
+            agency_id = FinishedSendingMessage.from_bytes(message_bytes)
+            logging.info(
+                f"action: finished_sending_received | result: success | ip: {addr[0]} | agency_id: {agency_id}"
+            )
+
+            self._agencies_finished.add(agency_id)
+            logging.info(
+                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)}"
+            )
+
+            Protocol.send_message(
+                client_sock,
+                MSG_TYPE_FINISHED_SENDING,
+                BetResponseMessage.to_bytes(True),
+            )
+
+            if len(self._agencies_finished) >= 5 and not self._lottery_executed:
+                logging.info(
+                    "action: all_agencies_finished | result: success | executing_lottery"
+                )
+                self._execute_lottery()
+
+        except Exception as e:
+            logging.error(
+                f"action: handle_finished_sending | result: fail | error: {e}"
+            )
+            Protocol.send_message(
+                client_sock,
+                MSG_TYPE_FINISHED_SENDING,
+                BetResponseMessage.to_bytes(False),
+            )
+
+    def __handle_winners_request_message(self, client_sock, message_bytes, addr):
+        try:
+            agency_id = WinnersRequestMessage.from_bytes(message_bytes)
+            logging.info(
+                f"action: winners_request_received | result: success | ip: {addr[0]} | agency_id: {agency_id}"
+            )
+
+            if not self._lottery_executed:
+                logging.warning(
+                    "action: winners_request | result: lottery_not_executed_yet"
+                )
+                empty_response = WinnersResponseMessage.to_bytes([])
+                Protocol.send_message(
+                    client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
+                )
+            else:
+                winners_dnis = [bet["document"] for bet in self._winners]
+                logging.info(
+                    f"action: winners_retrieved | result: success | winners_count: {len(winners_dnis)}"
+                )
+                response = WinnersResponseMessage.to_bytes(winners_dnis)
+                Protocol.send_message(client_sock, MSG_TYPE_WINNERS_RESPONSE, response)
+
+        except Exception as e:
+            logging.error(f"action: handle_winners_request | result: fail | error: {e}")
+            empty_response = WinnersResponseMessage.to_bytes([])
+            Protocol.send_message(
+                client_sock, MSG_TYPE_WINNERS_RESPONSE, empty_response
+            )
 
     def stop(self):
         logging.info("action: shutdown_server | result: in_progress")
@@ -195,7 +333,9 @@ class Server:
                 f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
             )
 
-        Protocol.send_message(client_sock, BetResponseMessage.to_bytes(True))
+        Protocol.send_message(
+            client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(True)
+        )
 
     @staticmethod
     def process_failed_batch_bets(
@@ -204,4 +344,6 @@ class Server:
         logging.error(
             f"action: apuesta_recibida | result: fail | cantidad: {bets_len} | error: {e}"
         )
-        Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+        Protocol.send_message(
+            client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
+        )
