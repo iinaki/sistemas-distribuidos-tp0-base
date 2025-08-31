@@ -1,6 +1,7 @@
 import socket
 import logging
 import struct
+from time import sleep
 from typing import Optional
 
 from .messages import BetMessage, BetResponseMessage
@@ -84,6 +85,7 @@ class Server:
             try:
                 client_sock.close()
                 logging.debug("action: close_client_connection | result: success")
+                sleep(5)
             except OSError as e:
                 logging.error(
                     f"action: close_client_connection | result: fail | error: {e}"
