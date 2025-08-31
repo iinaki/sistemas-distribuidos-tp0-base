@@ -1,15 +1,17 @@
 import struct
 import socket
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
-HEADER_LEN = 4
+HEADER_LEN = 5  # 4 bytes para length + 1 byte para message_type
 
 class Protocol:
     @staticmethod
-    def send_message(sock: socket.socket, message_bytes: bytes) -> None:
+    def send_message(
+        sock: socket.socket, message_type: int, message_bytes: bytes
+    ) -> None:
         try:
-            header = struct.pack("!I", len(message_bytes))
+            header = struct.pack("!IB", len(message_bytes), message_type)
             full_message = header + message_bytes
             Protocol._send_exact(sock, full_message)
 
@@ -18,16 +20,19 @@ class Protocol:
             raise
 
     @staticmethod
-    def receive_message(sock: socket.socket) -> Optional[bytes]:
+    def receive_message(sock: socket.socket) -> Optional[Tuple[int, bytes]]:
         try:
             header = Protocol._receive_exact(sock, HEADER_LEN)
             if not header:
                 return None
 
-            message_length = struct.unpack("!I", header)[0]
+            message_length, message_type = struct.unpack("!IB", header)
             message_bytes = Protocol._receive_exact(sock, message_length)
 
-            return message_bytes
+            if message_bytes is None:
+                return None
+
+            return (message_type, message_bytes)
 
         except Exception as e:
             logging.error(f"action: receive_message | result: fail | error: {e}")

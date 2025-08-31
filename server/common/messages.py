@@ -4,6 +4,13 @@ from .utils import Bet
 
 FIELDS = ["AGENCY_ID", "NOMBRE", "APELLIDO", "DOCUMENTO", "NACIMIENTO", "NUMERO"]
 
+MSG_TYPE_BET = 0x01
+MSG_TYPE_FINISHED_SENDING = 0x02
+MSG_TYPE_WINNERS_REQUEST = 0x03
+MSG_TYPE_WINNERS_RESPONSE = 0x04
+MSG_TYPE_LOTTERY_NOT_READY = 0x05
+
+
 class BetMessage:
     # El formato de un mensaje Bet va a ser siempre un string de la forma: "AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..."
     # Todos los campos van a ser strings que vienen en bytes (utf8)
@@ -40,6 +47,7 @@ class BetMessage:
 SUCCESS_STR = "success"
 ERROR_STR = "error"
 
+
 def parse_agency_id(b: bytes) -> str:
     s = b.decode("utf-8")
 
@@ -52,6 +60,7 @@ def parse_agency_id(b: bytes) -> str:
 
     return value.strip()
 
+
 class BetResponseMessage:
     @staticmethod
     def to_bytes(success: bool) -> bytes:
@@ -59,15 +68,17 @@ class BetResponseMessage:
             return SUCCESS_STR.encode("utf-8")
         return ERROR_STR.encode("utf-8")
 
+
 class FinishedSendingMessage:
     @staticmethod
     def from_bytes(b: bytes) -> str:
         return parse_agency_id(b)
 
+
 class WinnersRequestMessage:
     @staticmethod
     def from_bytes(b: bytes) -> str:
-       return parse_agency_id(b)
+        return parse_agency_id(b)
 
 
 class WinnersResponseMessage:

@@ -17,34 +17,36 @@ func NewProtocol() *Protocol {
 	return &Protocol{}
 }
 
-const HEADER_LEN = 4
+const HEADER_LEN = 5
 
-func (p *Protocol) SendMessage(conn net.Conn, messageBytes []byte) error {
+func (p *Protocol) SendMessage(conn net.Conn, messageType byte, messageBytes []byte) error {
 	header := make([]byte, HEADER_LEN)
-	binary.BigEndian.PutUint32(header, uint32(len(messageBytes)))
+	binary.BigEndian.PutUint32(header[0:4], uint32(len(messageBytes)))
+	header[4] = messageType
 
 	fullMessage := append(header, messageBytes...)
 
 	return p.sendExact(conn, fullMessage)
 }
 
-func (p *Protocol) ReceiveMessage(conn net.Conn) ([]byte, error) {
+func (p *Protocol) ReceiveMessage(conn net.Conn) (byte, []byte, error) {
 	header, err := p.receiveExact(conn, HEADER_LEN)
 	if err != nil {
 		protocolLog.Errorf("action: receive_header | result: fail | error: %v", err)
-		return nil, fmt.Errorf("failed to receive header: %w", err)
+		return 0, nil, fmt.Errorf("failed to receive header: %w", err)
 	}
 
-	messageLength := binary.BigEndian.Uint32(header)
+	messageLength := binary.BigEndian.Uint32(header[0:4])
+	messageType := header[4]
 
 	messageBytes, err := p.receiveExact(conn, int(messageLength))
 	if err != nil {
 		protocolLog.Errorf("action: receive_message | result: fail | error: %v", err)
-		return nil, fmt.Errorf("failed to receive message: %w", err)
+		return 0, nil, fmt.Errorf("failed to receive message: %w", err)
 	}
 
 	protocolLog.Debugf("action: receive_message | result: success | message_length: %d", messageLength)
-	return messageBytes, nil
+	return messageType, messageBytes, nil
 }
 
 func (p *Protocol) receiveExact(conn net.Conn, numBytes int) ([]byte, error) {
