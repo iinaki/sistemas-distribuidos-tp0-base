@@ -2,7 +2,6 @@ package common
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -20,22 +19,16 @@ func NewProtocol() *Protocol {
 
 const HEADER_LEN = 4
 
-func (p *Protocol) SendMessage(conn net.Conn, message interface{}) error {
-	jsonData, err := json.Marshal(message)
-	if err != nil {
-		protocolLog.Errorf("action: serialize_message | result: fail | error: %v", err)
-		return fmt.Errorf("failed to serialize message: %w", err)
-	}
-
+func (p *Protocol) SendMessage(conn net.Conn, messageBytes []byte) error {
 	header := make([]byte, HEADER_LEN)
-	binary.BigEndian.PutUint32(header, uint32(len(jsonData)))
+	binary.BigEndian.PutUint32(header, uint32(len(messageBytes)))
 
-	fullMessage := append(header, jsonData...)
+	fullMessage := append(header, messageBytes...)
 
 	return p.sendExact(conn, fullMessage)
 }
 
-func (p *Protocol) ReceiveMessage(conn net.Conn) (map[string]interface{}, error) {
+func (p *Protocol) ReceiveMessage(conn net.Conn) ([]byte, error) {
 	header, err := p.receiveExact(conn, HEADER_LEN)
 	if err != nil {
 		protocolLog.Errorf("action: receive_header | result: fail | error: %v", err)
@@ -44,20 +37,14 @@ func (p *Protocol) ReceiveMessage(conn net.Conn) (map[string]interface{}, error)
 
 	messageLength := binary.BigEndian.Uint32(header)
 
-	jsonData, err := p.receiveExact(conn, int(messageLength))
+	messageBytes, err := p.receiveExact(conn, int(messageLength))
 	if err != nil {
 		protocolLog.Errorf("action: receive_message | result: fail | error: %v", err)
 		return nil, fmt.Errorf("failed to receive message: %w", err)
 	}
 
-	var message map[string]interface{}
-	if err := json.Unmarshal(jsonData, &message); err != nil {
-		protocolLog.Errorf("action: deserialize_message | result: fail | error: %v", err)
-		return nil, fmt.Errorf("failed to deserialize message: %w", err)
-	}
-
 	protocolLog.Debugf("action: receive_message | result: success | message_length: %d", messageLength)
-	return message, nil
+	return messageBytes, nil
 }
 
 func (p *Protocol) receiveExact(conn net.Conn, numBytes int) ([]byte, error) {
