@@ -34,6 +34,12 @@ for i in $(seq 1 "$CLIENT_COUNT"); do
     entrypoint: /client
     environment:
       - CLI_ID=${i}
+      - CLI_LOG_LEVEL=DEBUG
+      - CLI_BET_NOMBRE=Miguel
+      - CLI_BET_APELLIDO=Merentiel
+      - CLI_BET_DOCUMENTO=4409781
+      - CLI_BET_NACIMIENTO=2002-05-10
+      - CLI_BET_NUMERO=1000
     networks:
       - testing_net
     depends_on:
