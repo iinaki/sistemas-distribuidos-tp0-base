@@ -36,8 +36,21 @@ class BetMessage:
         )
         return bet
 
+
 SUCCESS_STR = "success"
 ERROR_STR = "error"
+
+def parse_agency_id(b: bytes) -> str:
+    s = b.decode("utf-8")
+
+    if "=" not in s:
+        raise ValueError("invalid agency ID message format")
+
+    key, value = s.split("=", 1)
+    if key.strip().upper() != "AGENCY_ID":
+        raise ValueError("expected AGENCY_ID field")
+
+    return value.strip()
 
 class BetResponseMessage:
     @staticmethod
@@ -45,3 +58,20 @@ class BetResponseMessage:
         if success:
             return SUCCESS_STR.encode("utf-8")
         return ERROR_STR.encode("utf-8")
+
+class FinishedSendingMessage:
+    @staticmethod
+    def from_bytes(b: bytes) -> str:
+        return parse_agency_id(b)
+
+class WinnersRequestMessage:
+    @staticmethod
+    def from_bytes(b: bytes) -> str:
+       return parse_agency_id(b)
+
+
+class WinnersResponseMessage:
+    @staticmethod
+    def to_bytes(winners: list[str]) -> bytes:
+        winners_str = ",".join(winners)
+        return f"WINNERS={winners_str}".encode("utf-8")
