@@ -1,9 +1,9 @@
 import socket
 import logging
 
-from server.common.messages import BetResponseMessage
-from .protocol import Protocol, MessageType, BetMessage
-from .utils import Bet, store_bets
+from .messages import BetMessage, BetResponseMessage
+from .protocol import Protocol
+from .utils import store_bets
 
 
 class Server:

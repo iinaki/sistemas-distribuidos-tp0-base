@@ -1,9 +1,8 @@
 from typing import Any, Dict
-
-from server.common.utils import Bet
+import logging
+from .utils import Bet
 
 FIELDS = ["AGENCY_ID", "NOMBRE", "APELLIDO", "DOCUMENTO", "NACIMIENTO", "NUMERO"]
-
 
 class BetMessage:
     # El formato de un mensaje Bet va a ser siempre un string de la forma: "AGENCY_ID=...,NOMBRE=...,APELLIDO=...,DOCUMENTO=...,NACIMIENTO=...,NUMERO=..."
@@ -26,6 +25,7 @@ class BetMessage:
             if req not in kv:
                 raise ValueError(f"missing field {req}")
 
+        logging.debug("action: bet_parsed | result: success | bet: %s", kv)
         bet = Bet(
             kv["AGENCY_ID"],
             kv["NOMBRE"],

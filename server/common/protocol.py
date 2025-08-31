@@ -1,7 +1,7 @@
 import struct
 import socket
 import logging
-from typing import Dict, Any, Optional
+from typing import Optional
 
 HEADER_LEN = 4
 
