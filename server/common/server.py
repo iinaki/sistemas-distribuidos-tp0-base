@@ -1,9 +1,11 @@
 import socket
 import logging
+import struct
+from typing import Optional
 
 from .messages import BetMessage, BetResponseMessage
 from .protocol import Protocol
-from .utils import store_bets
+from .utils import store_bets, Bet
 
 
 class Server:
@@ -48,27 +50,27 @@ class Server:
             addr = client_sock.getpeername()
             logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
 
-            message = Protocol.receive_message(client_sock)
-            if message is None:
+            batch_message_bytes = Protocol.receive_message(client_sock)
+            if batch_message_bytes is None:
                 logging.error(
-                    f"action: receive_bet | result: fail | ip: {addr[0]} | error: no_message_received"
+                    f"action: receive_batch | result: fail | ip: {addr[0]} | error: no_message_received"
                 )
                 return
 
             try:
-                bet = BetMessage.from_bytes(message)
+                batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
             except Exception as e:
+                logging.error(f"action: parse_bet | result: fail | error: {e}")
                 Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
-                logging.error(f"action: receive_bet | result: fail | error: {e}")
                 return
 
-            store_bets([bet])
+            bets_len = len(batch_bets)
 
-            logging.info(
-                f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
-            )
-
-            Protocol.send_message(client_sock, BetResponseMessage.to_bytes(True))
+            try:
+                Server.process_successful_batch_bets(batch_bets, client_sock, bets_len)
+            except Exception as e:
+                Server.process_failed_batch_bets(bets_len, client_sock, e)
+                return
 
             logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
 
@@ -117,3 +119,89 @@ class Server:
         except OSError as e:
             logging.error(f"action: close_server_socket | result: fail | error: {e}")
         logging.info("action: shutdown_server | result: success")
+
+    @staticmethod
+    def parse_individual_bet_message(
+        message_bytes: bytes, offset: int
+    ) -> tuple[Optional[bytes], bool, int]:
+        try:
+            if offset + 5 > len(message_bytes):
+                return None, False, offset
+
+            individual_length, is_last_bet_flag = struct.unpack(
+                "!IB", message_bytes[offset : offset + 5]
+            )
+            is_last_bet = bool(is_last_bet_flag)
+
+            content_start = offset + 5
+            content_end = content_start + individual_length
+
+            if content_end > len(message_bytes):
+                return None, False, offset
+
+            individual_content = message_bytes[content_start:content_end]
+
+            return individual_content, is_last_bet, content_end
+
+        except Exception as e:
+            logging.error(
+                f"action: receive_individual_message | result: fail | error: {e}"
+            )
+            return None, False, offset
+
+    @staticmethod
+    def parse_batch_bet_message(batch_message_bytes: bytes):
+        batch_bets = []
+        offset = 0
+        is_last_bet = False
+
+        while offset < len(batch_message_bytes) and not is_last_bet:
+            individual_content, is_last_bet, new_offset = (
+                Server.parse_individual_bet_message(batch_message_bytes, offset)
+            )
+
+            if individual_content is None:
+                logging.error(
+                    f"action: parse_individual_message | result: fail | offset: {offset}"
+                )
+                break
+
+            try:
+                bet = BetMessage.from_bytes(individual_content)
+                logging.debug(
+                    f"action: bet_parsed | result: success | bet: {bet.first_name} {bet.last_name}"
+                )
+                batch_bets.append(bet)
+
+            except Exception as e:
+                raise e
+
+            offset = new_offset
+
+        return batch_bets
+
+    @staticmethod
+    def process_successful_batch_bets(
+        batch_bets: list[Bet], client_sock: socket.socket, bets_len: int
+    ):
+        store_bets(batch_bets)
+
+        logging.info(
+            f"action: apuesta_recibida | result: success | cantidad: {bets_len}"
+        )
+
+        for bet in batch_bets:
+            logging.info(
+                f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
+            )
+
+        Protocol.send_message(client_sock, BetResponseMessage.to_bytes(True))
+
+    @staticmethod
+    def process_failed_batch_bets(
+        bets_len: int, client_sock: socket.socket, e: Exception
+    ):
+        logging.error(
+            f"action: apuesta_recibida | result: fail | cantidad: {bets_len} | error: {e}"
+        )
+        Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
