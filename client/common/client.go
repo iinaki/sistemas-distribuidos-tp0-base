@@ -324,6 +324,7 @@ func (c *Client) requestWinners(protocol *Protocol) error {
 		}
 
 		log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", len(winnersResponse.Winners))
+		log.Debug("action: winners_in_response | result: success | ganadores: %v", winnersResponse.Winners)
 		return nil
 	}
 }
