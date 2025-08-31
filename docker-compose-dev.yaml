@@ -6,10 +6,10 @@ services:
     entrypoint: python3 /main.py
     environment:
       - PYTHONUNBUFFERED=1
-      - LOGGING_LEVEL=DEBUG
     networks:
       - testing_net
-
+    volumes:
+      - ./server/config.ini:/config.ini
   client1:
     container_name: client1
     image: client:latest
@@ -17,16 +17,13 @@ services:
     environment:
       - CLI_ID=1
       - CLI_LOG_LEVEL=DEBUG
-      - CLI_BET_NOMBRE=Miguel
-      - CLI_BET_APELLIDO=Merentiel
-      - CLI_BET_DOCUMENTO=4409781
-      - CLI_BET_NACIMIENTO=2002-05-10
-      - CLI_BET_NUMERO=1000
     networks:
       - testing_net
     depends_on:
       - server
-
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/dataset/agency-1.csv:/agency.csv
   client2:
     container_name: client2
     image: client:latest
@@ -34,16 +31,13 @@ services:
     environment:
       - CLI_ID=2
       - CLI_LOG_LEVEL=DEBUG
-      - CLI_BET_NOMBRE=Leandro
-      - CLI_BET_APELLIDO=Paredes
-      - CLI_BET_DOCUMENTO=4409782
-      - CLI_BET_NACIMIENTO=2002-05-10
-      - CLI_BET_NUMERO=2000
     networks:
       - testing_net
     depends_on:
       - server
-
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/dataset/agency-2.csv:/agency.csv
   client3:
     container_name: client3
     image: client:latest
@@ -51,16 +45,13 @@ services:
     environment:
       - CLI_ID=3
       - CLI_LOG_LEVEL=DEBUG
-      - CLI_BET_NOMBRE=Lautaro
-      - CLI_BET_APELLIDO=Blanco
-      - CLI_BET_DOCUMENTO=4409783
-      - CLI_BET_NACIMIENTO=2002-05-10
-      - CLI_BET_NUMERO=3000
     networks:
       - testing_net
     depends_on:
       - server
-
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/dataset/agency-3.csv:/agency.csv
   client4:
     container_name: client4
     image: client:latest
@@ -68,16 +59,13 @@ services:
     environment:
       - CLI_ID=4
       - CLI_LOG_LEVEL=DEBUG
-      - CLI_BET_NOMBRE=Ayrton
-      - CLI_BET_APELLIDO=Cost
-      - CLI_BET_DOCUMENTO=4409784
-      - CLI_BET_NACIMIENTO=2002-05-10
-      - CLI_BET_NUMERO=4000
     networks:
       - testing_net
     depends_on:
       - server
-
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/dataset/agency-4.csv:/agency.csv
   client5:
     container_name: client5
     image: client:latest
@@ -85,16 +73,13 @@ services:
     environment:
       - CLI_ID=5
       - CLI_LOG_LEVEL=DEBUG
-      - CLI_BET_NOMBRE=Martin
-      - CLI_BET_APELLIDO=Palermo
-      - CLI_BET_DOCUMENTO=4409785
-      - CLI_BET_NACIMIENTO=2002-05-10
-      - CLI_BET_NUMERO=5000
     networks:
       - testing_net
     depends_on:
       - server
-
+    volumes:
+      - ./client/config.yaml:/config.yaml
+      - ./.data/dataset/agency-5.csv:/agency.csv
 networks:
   testing_net:
     ipam:
