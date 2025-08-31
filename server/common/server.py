@@ -9,15 +9,13 @@ from .messages import (
     FinishedSendingMessage,
     WinnersRequestMessage,
     WinnersResponseMessage,
-)
-from .protocol import (
-    Protocol,
     MSG_TYPE_BET,
     MSG_TYPE_FINISHED_SENDING,
     MSG_TYPE_WINNERS_REQUEST,
     MSG_TYPE_WINNERS_RESPONSE,
     MSG_TYPE_LOTTERY_NOT_READY,
 )
+from .protocol import Protocol
 from .utils import store_bets, Bet, load_bets, has_won
 
 
@@ -234,11 +232,15 @@ class Server:
                     client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
                 )
             else:
-                winners_dnis = [bet["document"] for bet in self._winners]
+                agency_winners = [
+                    bet["document"]
+                    for bet in self._winners
+                    if bet["agency"] == int(agency_id)
+                ]
                 logging.info(
-                    f"action: winners_retrieved | result: success | winners_count: {len(winners_dnis)}"
+                    f"action: winners_retrieved | result: success | agency_id: {agency_id} | winners_count: {len(agency_winners)}"
                 )
-                response = WinnersResponseMessage.to_bytes(winners_dnis)
+                response = WinnersResponseMessage.to_bytes(agency_winners)
                 Protocol.send_message(client_sock, MSG_TYPE_WINNERS_RESPONSE, response)
 
         except Exception as e:
