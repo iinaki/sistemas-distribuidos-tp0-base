@@ -205,7 +205,7 @@ class Server:
 
             if len(self._agencies_finished) >= self._max_agency_id and not self._lottery_executed:
                 logging.info(
-                    f"action: all_agencies_finished | result: success | total_agencies: {self._max_agency_id} | executing_lottery"
+                    f"action: all_agencies_finished | result: success | total_agencies: {self._max_agency_id}"
                 )
                 self._execute_lottery()
 
