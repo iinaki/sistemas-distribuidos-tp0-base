@@ -85,7 +85,7 @@ class Server:
             try:
                 client_sock.close()
                 logging.debug("action: close_client_connection | result: success")
-                sleep(5)
+                sleep(1)
             except OSError as e:
                 logging.error(
                     f"action: close_client_connection | result: fail | error: {e}"
