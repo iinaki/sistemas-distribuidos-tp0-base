@@ -133,6 +133,13 @@ func (c *Client) StartClientLoop() {
 
 	log.Infof("action: load_bets | result: success | client_id: %v | total_bets: %d", c.config.ID, len(bets))
 
+	err = c.createClientSocket()
+	if err != nil {
+		log.Errorf("action: create_persistent_socket | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+	defer c.closeConnection()
+
 	protocol := NewProtocol()
 
 	err = c.sendBets(protocol, bets)
@@ -152,6 +159,8 @@ func (c *Client) StartClientLoop() {
 		log.Errorf("action: request_winners | result: fail | client_id: %v | error: %v", c.config.ID, err)
 		return
 	}
+
+	log.Infof("action: client_finished | result: success")
 }
 
 func (c *Client) closeConnection() {
@@ -189,18 +198,10 @@ func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
 
 		batch := bets[i:end]
 
-		err := c.createClientSocket()
-		if err != nil {
-			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
-				c.config.ID, err)
-			return err
-		}
-
-		err = c.SendBatch(protocol, batch)
+		err := c.SendBatch(protocol, batch)
 		if err != nil {
 			log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
 				c.config.ID, batchCount, err)
-			c.closeConnection()
 			return err
 		}
 
@@ -208,22 +209,19 @@ func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
 		if err != nil {
 			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: %v",
 				c.config.ID, batchCount, err)
-			c.closeConnection()
 			return err
 		}
 
 		if messageType != MsgTypeBet {
 			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: unexpected_message_type: %d",
 				c.config.ID, batchCount, messageType)
-			c.closeConnection()
-			return err
+			return fmt.Errorf("unexpected message type: %d", messageType)
 		}
 
 		success, err := BetResponseFromBytes(responseBytes)
 		if err != nil {
 			log.Errorf("action: parse_response | result: fail | client_id: %v | batch_id: %d | error: %v",
 				c.config.ID, batchCount, err)
-			c.closeConnection()
 			return err
 		}
 
@@ -235,8 +233,6 @@ func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
 			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
 				c.config.ID, batchCount, len(batch))
 		}
-
-		c.closeConnection()
 
 		// Wait a time between sending one message and the next one
 		// if end < len(bets) && c.running {
@@ -250,16 +246,10 @@ func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
 }
 
 func (c *Client) sendFinishedSending(protocol *Protocol) error {
-	err := c.createClientSocket()
-	if err != nil {
-		return fmt.Errorf("error creating socket for finished sending: %v", err)
-	}
-	defer c.closeConnection()
-
 	message := &FinishedSendingMessage{AgencyID: c.config.ID}
 	messageBytes := message.ToBytes()
 
-	err = protocol.SendMessage(c.conn, MsgTypeFinishedSending, messageBytes)
+	err := protocol.SendMessage(c.conn, MsgTypeFinishedSending, messageBytes)
 	if err != nil {
 		return fmt.Errorf("error sending finished sending: %v", err)
 	}
@@ -288,16 +278,17 @@ func (c *Client) sendFinishedSending(protocol *Protocol) error {
 
 func (c *Client) requestWinners(protocol *Protocol) error {
 	for {
-		err := c.createClientSocket()
-		if err != nil {
-			return fmt.Errorf("error creating socket for winners request: %v", err)
+		if c.conn == nil {
+			err := c.createClientSocket()
+			if err != nil {
+				return fmt.Errorf("error creating socket for winners request: %v", err)
+			}
 		}
-		defer c.closeConnection()
 
 		message := &WinnersRequestMessage{AgencyID: c.config.ID}
 		messageBytes := message.ToBytes()
 
-		err = protocol.SendMessage(c.conn, MsgTypeWinnersRequest, messageBytes)
+		err := protocol.SendMessage(c.conn, MsgTypeWinnersRequest, messageBytes)
 		if err != nil {
 			return fmt.Errorf("error sending winners request: %v", err)
 		}

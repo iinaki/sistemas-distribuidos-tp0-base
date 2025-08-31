@@ -31,6 +31,7 @@ class Server:
         self._lottery_executed = False
         self._winning_number = None
         self._winners = []
+        self._max_agency_id = 0 
 
     def _execute_lottery(self):
         if self._lottery_executed:
@@ -91,38 +92,35 @@ class Server:
                 break
 
     def __handle_client_connection(self, client_sock):
-        """
-        Read message from a specific client socket and closes the socket
-
-        If a problem arises in the communication with the client, the
-        client socket will also be closed
-        """
         try:
             addr = client_sock.getpeername()
-            logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
+            logging.info(f"action: accept_bet | result: in_progress")
 
-            message_result = Protocol.receive_message(client_sock)
-            if message_result is None:
-                logging.error(
-                    f"action: receive_message | result: fail | ip: {addr[0]} | error: no_message_received"
-                )
-                return
+            while True:
+                message_result = Protocol.receive_message(client_sock)
+                if message_result is None:
+                    logging.info(f"action: client_disconnected | result: success")
+                    break
 
-            message_type, message_bytes = message_result
+                message_type, message_bytes = message_result
 
-            if message_type == MSG_TYPE_BET:
-                self.__handle_bet_message(client_sock, message_bytes, addr)
-            elif message_type == MSG_TYPE_FINISHED_SENDING:
-                self.__handle_finished_sending_message(client_sock, message_bytes, addr)
-            elif message_type == MSG_TYPE_WINNERS_REQUEST:
-                self.__handle_winners_request_message(client_sock, message_bytes, addr)
-            else:
-                logging.error(
-                    f"action: handle_message | result: fail | ip: {addr[0]} | error: unknown_message_type: {message_type}"
-                )
-                Protocol.send_message(
-                    client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
-                )
+                if message_type == MSG_TYPE_BET:
+                    self.__handle_bet_message(client_sock, message_bytes, addr)
+                elif message_type == MSG_TYPE_FINISHED_SENDING:
+                    self.__handle_finished_sending_message(
+                        client_sock, message_bytes, addr
+                    )
+                elif message_type == MSG_TYPE_WINNERS_REQUEST:
+                    self.__handle_winners_request_message(client_sock, message_bytes)
+                    break
+                else:
+                    logging.error(
+                        f"action: handle_message | result: fail | error: unknown_message_type: {message_type}"
+                    )
+                    Protocol.send_message(
+                        client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
+                    )
+                    break
 
         except Exception as e:
             logging.error(f"action: handle_client | result: fail | error: {e}")
@@ -135,7 +133,10 @@ class Server:
         finally:
             try:
                 client_sock.close()
-                logging.debug("action: close_client_connection | result: success")
+                if addr:
+                    logging.debug(
+                        f"action: close_client_connection | result: success | ip: {addr[0]}"
+                    )
             except OSError as e:
                 logging.error(
                     f"action: close_client_connection | result: fail | error: {e}"
@@ -172,6 +173,8 @@ class Server:
             )
             return
 
+        self._max_agency_id = max(self._max_agency_id, batch_bets[0].agency)
+
         bets_len = len(batch_bets)
 
         try:
@@ -191,7 +194,7 @@ class Server:
 
             self._agencies_finished.add(agency_id)
             logging.info(
-                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)}"
+                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)} | max_agency_id: {self._max_agency_id}"
             )
 
             Protocol.send_message(
@@ -200,9 +203,9 @@ class Server:
                 BetResponseMessage.to_bytes(True),
             )
 
-            if len(self._agencies_finished) >= 5 and not self._lottery_executed:
+            if len(self._agencies_finished) >= self._max_agency_id and not self._lottery_executed:
                 logging.info(
-                    "action: all_agencies_finished | result: success | executing_lottery"
+                    f"action: all_agencies_finished | result: success | total_agencies: {self._max_agency_id} | executing_lottery"
                 )
                 self._execute_lottery()
 
@@ -216,11 +219,11 @@ class Server:
                 BetResponseMessage.to_bytes(False),
             )
 
-    def __handle_winners_request_message(self, client_sock, message_bytes, addr):
+    def __handle_winners_request_message(self, client_sock, message_bytes):
         try:
             agency_id = WinnersRequestMessage.from_bytes(message_bytes)
             logging.info(
-                f"action: winners_request_received | result: success | ip: {addr[0]} | agency_id: {agency_id}"
+                f"action: winners_request_received | result: success | agency_id: {agency_id}"
             )
 
             if not self._lottery_executed:
