@@ -41,7 +41,7 @@ for i in $(seq 1 "$CLIENT_COUNT"); do
       - server
     volumes:
       - ./client/config.yaml:/config.yaml
-      - ./.data/dataset/agency-${i}.csv:/agency.csv
+      - ./.data/agency-${i}.csv:/agency.csv
 EOF
 done
 
