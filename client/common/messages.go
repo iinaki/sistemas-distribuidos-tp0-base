@@ -32,7 +32,7 @@ func (b *Bet) toBytes() []byte {
 		b.AgencyID, b.Nombre, b.Apellido, b.Documento, b.Nacimiento, b.Numero))
 }
 
-func ParseBetResponse(responseBytes []byte) (bool, error) {
+func BetResponseFromBytes(responseBytes []byte) (bool, error) {
 	response := strings.TrimSpace(string(responseBytes))
 
 	switch response {

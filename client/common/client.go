@@ -134,78 +134,16 @@ func (c *Client) StartClientLoop() {
 	log.Infof("action: load_bets | result: success | client_id: %v | total_bets: %d", c.config.ID, len(bets))
 
 	protocol := NewProtocol()
-	batchCount := 0
 
-	for i := 0; i < len(bets) && c.running; i += c.config.BatchMaxAmount {
-		batchCount++
-
-		end := i + c.config.BatchMaxAmount
-		if end > len(bets) {
-			end = len(bets)
-		}
-
-		batch := bets[i:end]
-
-		err := c.createClientSocket()
-		if err != nil {
-			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
-				c.config.ID, err)
-			return
-		}
-
-		err = c.SendBatch(protocol, batch)
-		if err != nil {
-			log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
-				c.config.ID, batchCount, err)
-			c.closeConnection()
-			return
-		}
-
-		messageType, responseBytes, err := protocol.ReceiveMessage(c.conn)
-		if err != nil {
-			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: %v",
-				c.config.ID, batchCount, err)
-			c.closeConnection()
-			return
-		}
-
-		if messageType != MsgTypeBet {
-			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: unexpected_message_type: %d",
-				c.config.ID, batchCount, messageType)
-			c.closeConnection()
-			return
-		}
-
-		success, err := ParseBetResponse(responseBytes)
-		if err != nil {
-			log.Errorf("action: parse_response | result: fail | client_id: %v | batch_id: %d | error: %v",
-				c.config.ID, batchCount, err)
-			c.closeConnection()
-			return
-		}
-
-		if success {
-			log.Infof("action: apuesta_enviada | result: success | client_id: %v | batch_id: %d | cantidad: %d",
-				c.config.ID, batchCount, len(batch))
-			log.Infof("action: apuesta_recibida | result: success | cantidad: %d", len(batch))
-		} else {
-			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
-				c.config.ID, batchCount, len(batch))
-		}
-
-		c.closeConnection()
-
-		// Wait a time between sending one message and the next one
-		// if end < len(bets) && c.running {
-		// 	time.Sleep(c.config.LoopPeriod)
-		// }
+	err = c.sendBets(protocol, bets)
+	if err != nil {
+		log.Errorf("action: send_bets | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
 	}
 
-	log.Infof("action: loop_finished | result: success | client_id: %v | total_batches: %d", c.config.ID, batchCount)
-
-	err = c.sendFinishedNotification(protocol)
+	err = c.sendFinishedSending(protocol)
 	if err != nil {
-		log.Errorf("action: send_finished_notification | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		log.Errorf("action: send_finished_sending | result: fail | client_id: %v | error: %v", c.config.ID, err)
 		return
 	}
 
@@ -238,10 +176,83 @@ func (c *Client) Stop() {
 	log.Infof("action: shutdown_client | result: success | client_id: %v", c.config.ID)
 }
 
-func (c *Client) sendFinishedNotification(protocol *Protocol) error {
+func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
+	batchCount := 0
+
+	for i := 0; i < len(bets) && c.running; i += c.config.BatchMaxAmount {
+		batchCount++
+
+		end := i + c.config.BatchMaxAmount
+		if end > len(bets) {
+			end = len(bets)
+		}
+
+		batch := bets[i:end]
+
+		err := c.createClientSocket()
+		if err != nil {
+			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
+				c.config.ID, err)
+			return err
+		}
+
+		err = c.SendBatch(protocol, batch)
+		if err != nil {
+			log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
+				c.config.ID, batchCount, err)
+			c.closeConnection()
+			return err
+		}
+
+		messageType, responseBytes, err := protocol.ReceiveMessage(c.conn)
+		if err != nil {
+			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: %v",
+				c.config.ID, batchCount, err)
+			c.closeConnection()
+			return err
+		}
+
+		if messageType != MsgTypeBet {
+			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: unexpected_message_type: %d",
+				c.config.ID, batchCount, messageType)
+			c.closeConnection()
+			return err
+		}
+
+		success, err := BetResponseFromBytes(responseBytes)
+		if err != nil {
+			log.Errorf("action: parse_response | result: fail | client_id: %v | batch_id: %d | error: %v",
+				c.config.ID, batchCount, err)
+			c.closeConnection()
+			return err
+		}
+
+		if success {
+			log.Infof("action: apuesta_enviada | result: success | client_id: %v | batch_id: %d | cantidad: %d",
+				c.config.ID, batchCount, len(batch))
+			log.Infof("action: apuesta_recibida | result: success | cantidad: %d", len(batch))
+		} else {
+			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
+				c.config.ID, batchCount, len(batch))
+		}
+
+		c.closeConnection()
+
+		// Wait a time between sending one message and the next one
+		// if end < len(bets) && c.running {
+		// 	time.Sleep(c.config.LoopPeriod)
+		// }
+	}
+
+	log.Infof("action: loop_finished | result: success | client_id: %v | total_batches: %d", c.config.ID, batchCount)
+
+	return nil
+}
+
+func (c *Client) sendFinishedSending(protocol *Protocol) error {
 	err := c.createClientSocket()
 	if err != nil {
-		return fmt.Errorf("error creating socket for finished notification: %v", err)
+		return fmt.Errorf("error creating socket for finished sending: %v", err)
 	}
 	defer c.closeConnection()
 
@@ -250,19 +261,19 @@ func (c *Client) sendFinishedNotification(protocol *Protocol) error {
 
 	err = protocol.SendMessage(c.conn, MsgTypeFinishedSending, messageBytes)
 	if err != nil {
-		return fmt.Errorf("error sending finished notification: %v", err)
+		return fmt.Errorf("error sending finished sending: %v", err)
 	}
 
 	messageType, responseBytes, err := protocol.ReceiveMessage(c.conn)
 	if err != nil {
-		return fmt.Errorf("error receiving finished notification response: %v", err)
+		return fmt.Errorf("error receiving finished sending response: %v", err)
 	}
 
 	if messageType != MsgTypeFinishedSending {
 		return fmt.Errorf("unexpected response message type: %d", messageType)
 	}
 
-	success, err := ParseBetResponse(responseBytes)
+	success, err := BetResponseFromBytes(responseBytes)
 	if err != nil {
 		return fmt.Errorf("error parsing finished notification response: %v", err)
 	}
