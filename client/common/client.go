@@ -133,13 +133,6 @@ func (c *Client) StartClientLoop() {
 
 	log.Infof("action: load_bets | result: success | client_id: %v | total_bets: %d", c.config.ID, len(bets))
 
-	err = c.createClientSocket()
-	if err != nil {
-		log.Errorf("action: create_persistent_socket | result: fail | client_id: %v | error: %v", c.config.ID, err)
-		return
-	}
-	defer c.closeConnection()
-
 	protocol := NewProtocol()
 
 	err = c.sendBets(protocol, bets)
@@ -186,6 +179,13 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
+	err := c.createClientSocket()
+	if err != nil {
+		log.Errorf("action: create_persistent_socket | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return err
+	}
+	defer c.closeConnection()
+
 	batchCount := 0
 
 	for i := 0; i < len(bets) && c.running; i += c.config.BatchMaxAmount {
@@ -242,14 +242,24 @@ func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
 
 	log.Infof("action: loop_finished | result: success | client_id: %v | total_batches: %d", c.config.ID, batchCount)
 
+	c.closeConnection()
+	time.Sleep(c.config.LoopPeriod)
+
 	return nil
 }
 
 func (c *Client) sendFinishedSending(protocol *Protocol) error {
+	err := c.createClientSocket()
+	if err != nil {
+		log.Errorf("action: create_persistent_socket | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return err
+	}
+	defer c.closeConnection()
+
 	message := &FinishedSendingMessage{AgencyID: c.config.ID}
 	messageBytes := message.ToBytes()
 
-	err := protocol.SendMessage(c.conn, MsgTypeFinishedSending, messageBytes)
+	err = protocol.SendMessage(c.conn, MsgTypeFinishedSending, messageBytes)
 	if err != nil {
 		return fmt.Errorf("error sending finished sending: %v", err)
 	}
