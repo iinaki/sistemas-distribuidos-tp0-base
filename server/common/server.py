@@ -32,7 +32,7 @@ class Server:
         self._winning_number = None
         self._winners = []
         self._participating_agencies = set()
-        
+
     def _execute_lottery(self):
         if self._lottery_executed:
             return
@@ -62,6 +62,7 @@ class Server:
             logging.info(
                 f"action: execute_lottery | result: success | winners_count: {len(winners)}"
             )
+            logging.debug(f"action: execute_lottery_winners | result: success | winners: {self._winners}")
 
         except Exception as e:
             logging.error(f"action: execute_lottery | result: fail | error: {e}")
