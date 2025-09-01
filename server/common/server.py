@@ -31,8 +31,8 @@ class Server:
         self._lottery_executed = False
         self._winning_number = None
         self._winners = []
-        self._max_agency_id = 0 
-
+        self._participating_agencies = set()
+        
     def _execute_lottery(self):
         if self._lottery_executed:
             return
@@ -173,7 +173,7 @@ class Server:
             )
             return
 
-        self._max_agency_id = max(self._max_agency_id, batch_bets[0].agency)
+        self._participating_agencies.add(batch_bets[0].agency)
 
         bets_len = len(batch_bets)
 
@@ -193,8 +193,9 @@ class Server:
             )
 
             self._agencies_finished.add(agency_id)
+            total_participating = len(self._participating_agencies)
             logging.info(
-                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)} | max_agency_id: {self._max_agency_id}"
+                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)} | total_participating_agencies: {total_participating}"
             )
 
             Protocol.send_message(
@@ -203,9 +204,9 @@ class Server:
                 BetResponseMessage.to_bytes(True),
             )
 
-            if len(self._agencies_finished) >= self._max_agency_id and not self._lottery_executed:
+            if len(self._agencies_finished) >= total_participating and not self._lottery_executed:
                 logging.info(
-                    f"action: all_agencies_finished | result: success | total_agencies: {self._max_agency_id}"
+                    f"action: all_agencies_finished | result: success | total_agencies: {total_participating}"
                 )
                 self._execute_lottery()
 
@@ -227,9 +228,7 @@ class Server:
             )
 
             if not self._lottery_executed:
-                logging.info(
-                    "action: winners_request | result: in_progress"
-                )
+                logging.info("action: winners_request | result: in_progress")
                 empty_response = WinnersResponseMessage.to_bytes([])
                 Protocol.send_message(
                     client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
