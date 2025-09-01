@@ -134,6 +134,13 @@ func (c *Client) StartClientLoop() {
 	log.Infof("action: load_bets | result: success | client_id: %v | total_bets: %d", c.config.ID, len(bets))
 
 	protocol := NewProtocol()
+	err = c.createClientSocket()
+	if err != nil {
+		log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
+			c.config.ID, err)
+		return
+	}
+
 	batchCount := 0
 
 	for i := 0; i < len(bets) && c.running; i += c.config.BatchMaxAmount {
@@ -145,13 +152,6 @@ func (c *Client) StartClientLoop() {
 		}
 
 		batch := bets[i:end]
-
-		err := c.createClientSocket()
-		if err != nil {
-			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
-				c.config.ID, err)
-			return
-		}
 
 		err = c.SendBatch(protocol, batch)
 		if err != nil {
@@ -186,13 +186,12 @@ func (c *Client) StartClientLoop() {
 				c.config.ID, batchCount, len(batch))
 		}
 
-		c.closeConnection()
-
-		// Wait a time between sending one message and the next one
-		if end < len(bets) && c.running {
-			time.Sleep(c.config.LoopPeriod)
-		}
+		// // Wait a time between sending one message and the next one
+		// if end < len(bets) && c.running {
+		// 	time.Sleep(c.config.LoopPeriod)
+		// }
 	}
+	c.closeConnection()
 
 	log.Infof("action: loop_finished | result: success | client_id: %v | total_batches: %d", c.config.ID, batchCount)
 }
