@@ -66,7 +66,6 @@ class Server:
 
         except Exception as e:
             logging.error(f"action: execute_lottery | result: fail | error: {e}")
-            # Keep lottery as not executed so it can be retried
             self._lottery_executed = False
 
     def run(self):
