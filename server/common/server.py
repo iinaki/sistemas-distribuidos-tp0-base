@@ -50,29 +50,30 @@ class Server:
             addr = client_sock.getpeername()
             logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
 
-            batch_message_bytes = Protocol.receive_message(client_sock)
-            if batch_message_bytes is None:
-                logging.error(
-                    f"action: receive_batch | result: fail | ip: {addr[0]} | error: no_message_received"
-                )
-                return
+            while True:
+                batch_message_bytes = Protocol.receive_message(client_sock)
+                if batch_message_bytes is None:
+                    logging.info(f"action: close_client_connection | result: success | ip: {addr[0]}")
+                    break
 
-            try:
-                batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
-            except Exception as e:
-                logging.error(f"action: parse_bet | result: fail | error: {e}")
-                Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
-                return
+                try:
+                    batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
+                except Exception as e:
+                    logging.error(f"action: parse_bet | result: fail | error: {e}")
+                    Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+                    break
 
-            bets_len = len(batch_bets)
+                bets_len = len(batch_bets)
 
-            try:
-                Server.process_successful_batch_bets(batch_bets, client_sock, bets_len)
-            except Exception as e:
-                Server.process_failed_batch_bets(bets_len, client_sock, e)
-                return
+                try:
+                    Server.process_successful_batch_bets(
+                        batch_bets, client_sock, bets_len
+                    )
+                except Exception as e:
+                    Server.process_failed_batch_bets(bets_len, client_sock, e)
+                    break
 
-            logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
+                logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
 
         except Exception as e:
             logging.error(f"action: handle_bet | result: fail | error: {e}")
@@ -85,9 +86,7 @@ class Server:
                 client_sock.close()
                 logging.debug("action: close_client_connection | result: success")
             except OSError as e:
-                logging.error(
-                    f"action: close_client_connection | result: fail | error: {e}"
-                )
+                logging.error(f"action: close_client_connection | result: fail | error: {e}")
 
     def __accept_new_connection(self):
         """
