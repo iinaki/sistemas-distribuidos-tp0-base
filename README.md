@@ -508,10 +508,8 @@ De nuevo, hay muchas maneras de resolver este problema, a mi me gusta esta forma
 func (c *Client) createBetMessage(bet Bet, isLastBet bool) []byte {
    betMessageBytes := bet.toBytes()
 
-
    header := make([]byte, 5)
    binary.BigEndian.PutUint32(header, uint32(len(betMessageBytes)))
-
 
    if isLastBet {
        header[4] = 1
@@ -519,11 +517,9 @@ func (c *Client) createBetMessage(bet Bet, isLastBet bool) []byte {
        header[4] = 0
    }
 
-
    result := make([]byte, 0, len(header)+len(betMessageBytes))
    result = append(result, header...)
    result = append(result, betMessageBytes...)
-
 
    return result
 }
@@ -532,17 +528,14 @@ func (c *Client) createBetMessage(bet Bet, isLastBet bool) []byte {
 func (c *Client) SendBatch(protocol *Protocol, bets []Bet) error {
    var batchMessage []byte
 
-
    for i, bet := range bets {
        isLastBet := (i == len(bets)-1)
        betMessage := c.createBetMessage(bet, isLastBet)
        batchMessage = append(batchMessage, betMessage...)
    }
 
-
    log.Debugf("action: send_batch | result: in_progress | client_id: %v | batch_size: %d | total_bytes: %d",
        c.config.ID, len(bets), len(batchMessage))
-
 
    return protocol.SendMessage(c.conn, batchMessage)
 }
@@ -564,29 +557,30 @@ def __handle_client_connection(self, client_sock):
         addr = client_sock.getpeername()
         logging.info(f"action: accept_bet | result: in_progress | ip: {addr[0]}")
 
-        batch_message_bytes = Protocol.receive_message(client_sock)
-        if batch_message_bytes is None:
-            logging.error(
-                f"action: receive_batch | result: fail | ip: {addr[0]} | error: no_message_received"
-            )
-            return
+        while True:
+            batch_message_bytes = Protocol.receive_message(client_sock)
+            if batch_message_bytes is None:
+                logging.info(f"action: close_client_connection | result: success | ip: {addr[0]}")
+                break
 
-        try:
-            batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
-        except Exception as e:
-            logging.error(f"action: parse_bet | result: fail | error: {e}")
-            Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
-            return
+            try:
+                batch_bets = Server.parse_batch_bet_message(batch_message_bytes)
+            except Exception as e:
+                logging.error(f"action: parse_bet | result: fail | error: {e}")
+                Protocol.send_message(client_sock, BetResponseMessage.to_bytes(False))
+                break
 
-        bets_len = len(batch_bets)
+            bets_len = len(batch_bets)
 
-        try:
-            Server.process_successful_batch_bets(batch_bets, client_sock, bets_len)
-        except Exception as e:
-            Server.process_failed_batch_bets(bets_len, client_sock, e)
-            return
+            try:
+                Server.process_successful_batch_bets(
+                    batch_bets, client_sock, bets_len
+                )
+            except Exception as e:
+                Server.process_failed_batch_bets(bets_len, client_sock, e)
+                break
 
-        logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
+            logging.info(f"action: send_bet_response | result: success | ip: {addr[0]}")
 
     except Exception as e:
         logging.error(f"action: handle_bet | result: fail | error: {e}")
@@ -599,8 +593,7 @@ def __handle_client_connection(self, client_sock):
             client_sock.close()
             logging.debug("action: close_client_connection | result: success")
         except OSError as e:
-            logging.error(
-                f"action: close_client_connection | result: fail | error: {e}"
-            )
+            logging.error(f"action: close_client_connection | result: fail | error: {e}")
 ```
 
+Se puede notar tambien que hemos agregado un loop (`while True`) en el handler. Como ahora recibimos las bets de a batches vamos a estar recibiendo muchos mensajes de un cliente en el server, para poder manejar todos los mensajes que un cliente envia loopeamos haciendo `Protocol.receive_message(client_sock)` en cada iteracion y de esta manera conseguimos leer todos los mensajes del cliente. Si se intenta leer del stream y este devuelve 0 bytes entonces esto indica que el cliente termino de mandar, por lo que podemos pasar a handelear la próxima conexión.
