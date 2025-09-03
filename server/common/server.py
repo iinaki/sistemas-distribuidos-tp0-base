@@ -270,10 +270,11 @@ class Server:
             if offset + 5 > len(message_bytes):
                 return None, False, offset
 
-            individual_length, is_last_bet_flag = struct.unpack(
-                "!IB", message_bytes[offset : offset + 5]
+            individual_length = int.from_bytes(
+                message_bytes[offset:offset+4], byteorder="big", signed=False
             )
-            is_last_bet = bool(is_last_bet_flag)
+            is_last_bet_flag = message_bytes[offset+4]
+            is_last_bet = (is_last_bet_flag != 0)
 
             content_start = offset + 5
             content_end = content_start + individual_length

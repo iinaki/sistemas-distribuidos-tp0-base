@@ -1,18 +1,22 @@
-import struct
 import socket
 import logging
 from typing import Optional, Tuple
 
 HEADER_LEN = 5  # 4 bytes para length + 1 byte para message_type
+MAX_MESSAGE_LEN = 8 * 1024 # 8kb
 
 class Protocol:
     @staticmethod
-    def send_message(
-        sock: socket.socket, message_type: int, message_bytes: bytes
-    ) -> None:
+    def send_message(sock: socket.socket, message_type: int, message_bytes: bytes) -> None:
         try:
-            header = struct.pack("!IB", len(message_bytes), message_type)
+            length = len(message_bytes)
+            if length > MAX_MESSAGE_LEN:
+                raise ValueError(f"message too large: {length} bytes")
+
+            # 4 bytes de len + 1 byte del message type
+            header = length.to_bytes(4, byteorder="big", signed=False) + bytes([message_type])
             full_message = header + message_bytes
+
             Protocol._send_exact(sock, full_message)
 
         except Exception as e:
@@ -26,9 +30,16 @@ class Protocol:
             if not header:
                 return None
 
-            message_length, message_type = struct.unpack("!IB", header)
-            message_bytes = Protocol._receive_exact(sock, message_length)
+            message_length = int.from_bytes(header[:4], byteorder="big", signed=False)
+            message_type = header[4]
 
+            if message_length < 0 or message_length > MAX_MESSAGE_LEN:
+                logging.error(
+                    f"action: receive_message | result: fail | error: invalid_length={message_length}"
+                )
+                return None
+
+            message_bytes = Protocol._receive_exact(sock, message_length)
             if message_bytes is None:
                 return None
 
