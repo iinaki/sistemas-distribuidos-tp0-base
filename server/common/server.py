@@ -185,9 +185,9 @@ class Server:
     ):
         store_bets(batch_bets)
 
-        logging.info(
-            f"action: apuesta_recibida | result: success | cantidad: {bets_len}"
-        )
+        # logging.info(
+        #     f"action: apuesta_recibida | result: success | cantidad: {bets_len}"
+        # )
 
         for bet in batch_bets:
             logging.info(
