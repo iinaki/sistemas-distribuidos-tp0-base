@@ -59,73 +59,66 @@ func (c *Client) createClientSocket() error {
 func (c *Client) StartClientLoop() {
 	protocol := NewProtocol()
 
-	for msgID := 1; msgID <= c.config.LoopAmount && c.running; msgID++ {
-		err := c.createClientSocket()
-		if err != nil {
-			log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			return
-		}
-
-		betMessageBytes := CreateBetMessage(
+	err := c.createClientSocket()
+	if err != nil {
+		log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
 			c.config.ID,
-			c.config.Nombre,
-			c.config.Apellido,
+			err,
+		)
+		return
+	}
+
+	betMessageBytes := CreateBetMessage(
+		c.config.ID,
+		c.config.Nombre,
+		c.config.Apellido,
+		c.config.Documento,
+		c.config.Nacimiento,
+		c.config.Numero,
+	)
+
+	err = protocol.SendMessage(c.conn, betMessageBytes)
+	if err != nil {
+		log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
+			c.config.ID,
+			err,
+		)
+		c.closeConnection()
+		return
+	}
+
+	responseBytes, err := protocol.ReceiveMessage(c.conn)
+	if err != nil {
+		log.Errorf("action: receive_response | result: fail | client_id: %v | error: %v",
+			c.config.ID,
+			err,
+		)
+		c.closeConnection()
+		return
+	}
+
+	success, err := ParseBetResponse(responseBytes)
+	if err != nil {
+		log.Errorf("action: parse_response | result: fail | client_id: %v | error: %v",
+			c.config.ID,
+			err,
+		)
+		c.closeConnection()
+		return
+	}
+
+	if success {
+		log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %s",
 			c.config.Documento,
-			c.config.Nacimiento,
 			c.config.Numero,
 		)
-
-		err = protocol.SendMessage(c.conn, betMessageBytes)
-		if err != nil {
-			log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			c.closeConnection()
-			return
-		}
-
-		responseBytes, err := protocol.ReceiveMessage(c.conn)
-		if err != nil {
-			log.Errorf("action: receive_response | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			c.closeConnection()
-			return
-		}
-
-		success, err := ParseBetResponse(responseBytes)
-		if err != nil {
-			log.Errorf("action: parse_response | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			c.closeConnection()
-			return
-		}
-
-		if success {
-			log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %s",
-				c.config.Documento,
-				c.config.Numero,
-			)
-		} else {
-			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | error: server_returned_error",
-				c.config.ID,
-			)
-		}
-
-		c.closeConnection()
-
-		// Wait a time between sending one message and the next one
-		if msgID < c.config.LoopAmount && c.running {
-			time.Sleep(c.config.LoopPeriod)
-		}
+	} else {
+		log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | error: server_returned_error",
+			c.config.ID,
+		)
 	}
+
+	c.closeConnection()
 
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
