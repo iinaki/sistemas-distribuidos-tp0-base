@@ -1,15 +1,19 @@
-import struct
 import socket
 import logging
 from typing import Optional
 
 HEADER_LEN = 4
+MAX_MESSAGE_LEN = 8 * 1024  # 8 kb
 
 class Protocol:
     @staticmethod
     def send_message(sock: socket.socket, message_bytes: bytes) -> None:
         try:
-            header = struct.pack("!I", len(message_bytes))
+            length = len(message_bytes)
+            if length > MAX_MESSAGE_LEN:
+                raise ValueError(f"message too large: {length} bytes")
+
+            header = length.to_bytes(HEADER_LEN, byteorder="big", signed=False)
             full_message = header + message_bytes
             Protocol._send_exact(sock, full_message)
 
@@ -24,9 +28,18 @@ class Protocol:
             if not header:
                 return None
 
-            message_length = struct.unpack("!I", header)[0]
-            message_bytes = Protocol._receive_exact(sock, message_length)
+            message_length = int.from_bytes(header, byteorder="big", signed=False)
 
+            if message_length < 0 or message_length > MAX_MESSAGE_LEN:
+                logging.error(
+                    f"action: receive_message | result: fail | error: invalid_length={message_length}"
+                )
+                return None
+
+            if message_length == 0:
+                return b""
+
+            message_bytes = Protocol._receive_exact(sock, message_length)
             return message_bytes
 
         except Exception as e:
