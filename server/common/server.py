@@ -1,6 +1,5 @@
 import socket
 import logging
-import struct
 from typing import Optional
 
 from .messages import (
