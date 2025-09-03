@@ -226,7 +226,7 @@ func (c *Client) sendBets(protocol *Protocol, bets []Bet) error {
 		}
 
 		if success {
-			log.Infof("action: apuesta_enviada | result: success | client_id: %v | batch_id: %d | cantidad: %d",
+			log.Infof("action: apuesta_recibida | result: success | client_id: %v | batch_id: %d | cantidad: %d",
 				c.config.ID, batchCount, len(batch))
 		} else {
 			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
