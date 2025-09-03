@@ -3,7 +3,7 @@ package common
 import (
 	"encoding/binary"
 	"encoding/csv"
-	"fmt"
+	"io"
 	"net"
 	"os"
 	"time"
@@ -39,37 +39,31 @@ func NewClient(config ClientConfig) *Client {
 	return client
 }
 
-func (c *Client) loadBetsFromCSV() ([]Bet, error) {
-	file, err := os.Open("/agency.csv")
+func (c *Client) receiveBetResponse(protocol *Protocol, batchID int, batchSize int) error {
+	responseBytes, err := protocol.ReceiveMessage(c.conn)
 	if err != nil {
-		return nil, fmt.Errorf("error opening CSV file: %v", err)
+		log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: %v",
+			c.config.ID, batchID, err)
+		c.closeConnection()
+		return err
 	}
-	defer file.Close()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+	success, err := ParseBetResponse(responseBytes)
 	if err != nil {
-		return nil, fmt.Errorf("error reading CSV file: %v", err)
+		log.Errorf("action: parse_response | result: fail | client_id: %v | batch_id: %d | error: %v",
+			c.config.ID, batchID, err)
+		c.closeConnection()
+		return err
 	}
 
-	var bets []Bet
-	for _, record := range records {
-		if len(record) != 5 {
-			log.Errorf("invalid CSV record: %v", record)
-			continue
-		}
-		bet := Bet{
-			AgencyID:   c.config.ID,
-			Nombre:     record[0],
-			Apellido:   record[1],
-			Documento:  record[2],
-			Nacimiento: record[3],
-			Numero:     record[4],
-		}
-		bets = append(bets, bet)
+	if success {
+		log.Infof("action: apuesta_recibida | result: success | client_id: %v | batch_id: %d | cantidad: %d",
+			c.config.ID, batchID, batchSize)
+	} else {
+		log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
+			c.config.ID, batchID, batchSize)
 	}
-
-	return bets, nil
+	return nil
 }
 
 // Creamos Bet: len + is_last_bet + betmessage
@@ -125,71 +119,85 @@ func (c *Client) createClientSocket() error {
 
 // StartClientLoop: Loads bets from CSV and sends them in batches to the server
 func (c *Client) StartClientLoop() {
-	bets, err := c.loadBetsFromCSV()
-	if err != nil {
-		log.Errorf("action: load_bets | result: fail | client_id: %v | error: %v", c.config.ID, err)
-		return
-	}
-
-	log.Infof("action: load_bets | result: success | client_id: %v | total_bets: %d", c.config.ID, len(bets))
-
 	protocol := NewProtocol()
-	err = c.createClientSocket()
+	err := c.createClientSocket()
 	if err != nil {
 		log.Errorf("action: create_socket | result: fail | client_id: %v | error: %v",
 			c.config.ID, err)
 		return
 	}
+	defer c.closeConnection()
 
-	batchCount := 0
-
-	for i := 0; i < len(bets) && c.running; i += c.config.BatchMaxAmount {
-		batchCount++
-
-		end := i + c.config.BatchMaxAmount
-		if end > len(bets) {
-			end = len(bets)
-		}
-
-		batch := bets[i:end]
-
-		err = c.SendBatch(protocol, batch)
-		if err != nil {
-			log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
-				c.config.ID, batchCount, err)
-			c.closeConnection()
-			return
-		}
-
-		responseBytes, err := protocol.ReceiveMessage(c.conn)
-		if err != nil {
-			log.Errorf("action: receive_response | result: fail | client_id: %v | batch_id: %d | error: %v",
-				c.config.ID, batchCount, err)
-			c.closeConnection()
-			return
-		}
-
-		success, err := ParseBetResponse(responseBytes)
-		if err != nil {
-			log.Errorf("action: parse_response | result: fail | client_id: %v | batch_id: %d | error: %v",
-				c.config.ID, batchCount, err)
-			c.closeConnection()
-			return
-		}
-
-		if success {
-			log.Infof("action: apuesta_recibida | result: success | client_id: %v | batch_id: %d | cantidad: %d",
-				c.config.ID, batchCount, len(batch))
-		} else {
-			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | batch_id: %d | cantidad: %d",
-				c.config.ID, batchCount, len(batch))
-		}
-
-		// // Wait a time between sending one message and the next one
-		// if end < len(bets) && c.running {
-		// 	time.Sleep(c.config.LoopPeriod)
-		// }
+	file, err := os.Open("/agency.csv")
+	if err != nil {
+		log.Errorf("action: open_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
 	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Errorf("action: close_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		}
+	}()
+
+	reader := csv.NewReader(file)
+
+	batch := make([]Bet, 0, c.config.BatchMaxAmount)
+	batchCount := 0
+	totalBets := 0
+
+	for c.running {
+		record, err := reader.Read()
+		if err != nil {
+			if err == io.EOF {
+				// Send last batch if there's any
+				if len(batch) > 0 {
+					batchCount++
+					if err := c.SendBatch(protocol, batch); err != nil {
+						log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
+							c.config.ID, batchCount, err)
+						return
+					}
+					if err := c.receiveBetResponse(protocol, batchCount, len(batch)); err != nil {
+						return
+					}
+				}
+				break
+			}
+			log.Errorf("action: read_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
+			return
+		}
+
+		if len(record) != 5 {
+			log.Errorf("invalid CSV record: %v", record)
+			continue
+		}
+
+		bet := Bet{
+			AgencyID:   c.config.ID,
+			Nombre:     record[0],
+			Apellido:   record[1],
+			Documento:  record[2],
+			Nacimiento: record[3],
+			Numero:     record[4],
+		}
+
+		batch = append(batch, bet)
+		totalBets++
+
+		if len(batch) == c.config.BatchMaxAmount {
+			batchCount++
+			if err := c.SendBatch(protocol, batch); err != nil {
+				log.Errorf("action: send_batch | result: fail | client_id: %v | batch_id: %d | error: %v",
+					c.config.ID, batchCount, err)
+				return
+			}
+			if err := c.receiveBetResponse(protocol, batchCount, len(batch)); err != nil {
+				return
+			}
+			batch = batch[:0]
+		}
+	}
+
 	c.closeConnection()
 
 	log.Infof("action: loop_finished | result: success | client_id: %v | total_batches: %d", c.config.ID, batchCount)
