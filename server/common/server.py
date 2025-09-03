@@ -1,6 +1,5 @@
 import socket
 import logging
-import struct
 import signal
 from typing import Optional
 from multiprocessing import Process, Lock, RLock, Manager

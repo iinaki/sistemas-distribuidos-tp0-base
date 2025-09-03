@@ -1,4 +1,3 @@
-import struct
 import socket
 import logging
 from typing import Optional, Tuple
