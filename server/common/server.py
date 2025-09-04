@@ -159,7 +159,7 @@ class Server:
         read_bets_lock,
     ):
         def _new_process_signal_handler(sig, frame):
-            logging.info(f"action: shutdown_signal | scope: child | signal: {sig}")
+            logging.info(f"action: shutdown_signal | signal: {sig}")
             return
 
         signal.signal(signal.SIGTERM, _new_process_signal_handler)
@@ -222,11 +222,11 @@ class Server:
             try:
                 client_sock.close()
                 logging.debug(
-                    "action: close_client_socket | scope: child | result: success"
+                    "action: close_client_socket | result: success"
                 )
             except OSError as e:
                 logging.debug(
-                    f"action: close_client_socket | scope: child | error: {e}"
+                    f"action: close_client_socket | error: {e}"
                 )
 
     def __accept_new_connection(self):
