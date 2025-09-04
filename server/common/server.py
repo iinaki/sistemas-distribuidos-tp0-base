@@ -2,7 +2,7 @@ import socket
 import logging
 import signal
 from typing import Optional
-from multiprocessing import Process, Lock, RLock, Manager
+from multiprocessing import Process, Lock, RLock, Value
 
 from .messages import (
     BetMessage,
@@ -27,9 +27,9 @@ class Server:
         self._running = True
         self._expected_agencies = expected_agencies
 
-        self._manager = Manager()
-        self._agencies_finished_sending_set = self._manager.dict() 
-    
+        self._agencies_finished_sending_lock = Lock()
+        self._agencies_finished_sending_count = Value('i', 0)
+
         self._store_bets_lock = Lock() 
         self._read_bets_lock = RLock()
         
@@ -55,7 +55,8 @@ class Server:
                             target=self.__handle_new_client_process,
                             args=(
                                 client_sock,
-                                self._agencies_finished_sending_set,
+                                self._agencies_finished_sending_lock,
+                                self._agencies_finished_sending_count,
                                 self._expected_agencies,
                                 self._store_bets_lock,
                                 self._read_bets_lock, 
@@ -93,37 +94,39 @@ class Server:
                     process.kill()
         self._processes.clear()
 
+    # @staticmethod
+    # def __handle_new_client_process(
+    #     client_sock,
+    #     agencies_finished_sending_set,
+    #     agencies_finished_sending_lock,
+    #     expected_agencies,
+    #     store_bets_lock,
+    #     read_bets_lock,
+    # ):
+    #     try:
+    #         Server.__handle_client_connection(
+    #             client_sock,
+    #             agencies_finished_sending_set,
+    #             expected_agencies,
+    #             store_bets_lock,
+    #             read_bets_lock,
+    #         )
+    #     except Exception as e:
+    #         logging.error(f"action: handle_client_process | result: fail | error: {e}")
+    #     finally:
+    #         try:
+    #             client_sock.close()
+    #             logging.debug("action: close_client_connection | result: success")
+    #         except OSError as e:
+    #             logging.error(
+    #                 f"action: close_client_connection | result: fail | error: {e}"
+    #             )
+
     @staticmethod
     def __handle_new_client_process(
         client_sock,
-        agencies_finished_sending_set,
-        expected_agencies,
-        store_bets_lock,
-        read_bets_lock,
-    ):
-        try:
-            Server.__handle_client_connection(
-                client_sock,
-                agencies_finished_sending_set,
-                expected_agencies,
-                store_bets_lock,
-                read_bets_lock,
-            )
-        except Exception as e:
-            logging.error(f"action: handle_client_process | result: fail | error: {e}")
-        finally:
-            try:
-                client_sock.close()
-                logging.debug("action: close_client_connection | result: success")
-            except OSError as e:
-                logging.error(
-                    f"action: close_client_connection | result: fail | error: {e}"
-                )
-
-    @staticmethod
-    def __handle_client_connection(
-        client_sock,
-        agencies_finished_sending_set,
+        agencies_finished_sending_lock,
+        agencies_finished_sending_count,
         expected_agencies,
         store_bets_lock,
         read_bets_lock,
@@ -152,14 +155,16 @@ class Server:
                         client_sock,
                         message_bytes,
                         addr,
-                        agencies_finished_sending_set,
+                        agencies_finished_sending_lock,
+                        agencies_finished_sending_count,
                         expected_agencies,
                     )
                 elif message_type == MSG_TYPE_WINNERS_REQUEST:
                     Server.__handle_winners_request_message(
                         client_sock,
                         message_bytes,
-                        agencies_finished_sending_set,
+                        agencies_finished_sending_lock,
+                        agencies_finished_sending_count,
                         expected_agencies,
                         read_bets_lock,
                     )
@@ -176,6 +181,14 @@ class Server:
             logging.error(f"action: handle_connection | result: fail | error: {e}")
             addr = client_sock.getpeername() if client_sock else "unknown"
             logging.info(f"action: connection_ended | result: fail | address: {addr}")
+        finally:
+            try:
+                client_sock.close()
+                logging.debug("action: close_client_connection | result: success")
+            except OSError as e:
+                logging.error(
+                    f"action: close_client_connection | result: fail | error: {e}"
+                )
 
     def __accept_new_connection(self):
         """
@@ -215,7 +228,7 @@ class Server:
 
         try:
             Server.process_successful_batch_bets(
-                batch_bets, client_sock, bets_len, store_bets_lock
+                batch_bets, client_sock, store_bets_lock
             )
         except Exception as e:
             Server.process_failed_batch_bets(bets_len, client_sock, e)
@@ -228,7 +241,8 @@ class Server:
         client_sock,
         message_bytes,
         addr,
-        agencies_finished_sending_set,
+        agencies_finished_sending_lock,
+        agencies_finished_sending_count,
         expected_agencies,
     ):
         try:
@@ -236,17 +250,16 @@ class Server:
             logging.info(
                 f"action: finished_sending_received | result: success | ip: {addr[0]} | agency_id: {agency_id}"
             )
-
-            agencies_finished_sending_set[agency_id] = True
+            with agencies_finished_sending_lock:
+                agencies_finished_sending_count.value += 1
+                logging.info(
+                    f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {agencies_finished_sending_count.value} | total_participating_agencies: {expected_agencies}"
+                )
 
             Protocol.send_message(
                 client_sock,
                 MSG_TYPE_FINISHED_SENDING,
                 BetResponseMessage.to_bytes(True),
-            )
-
-            logging.info(
-                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(agencies_finished_sending_set)} | total_participating_agencies: {expected_agencies}"
             )
 
         except Exception as e:
@@ -284,7 +297,8 @@ class Server:
     def __handle_winners_request_message(
         client_sock, 
         message_bytes, 
-        agencies_finished_sending_set,
+        agencies_finished_sending_lock,
+        agencies_finished_sending_count,
         expected_agencies,
         read_bets_lock,
     ):
@@ -293,16 +307,21 @@ class Server:
             logging.info(
                 f"action: winners_request_received | result: success | agency_id: {agency_id}"
             )
+            ready_to_send = False
 
-            if len(agencies_finished_sending_set) < expected_agencies:
-                logging.warning(
-                    f"action: sending_lottery_not_ready | result: success"
-                )
-                empty_response = WinnersResponseMessage.to_bytes([])
-                Protocol.send_message(
-                    client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
-                )
-            else:
+            with agencies_finished_sending_lock:
+                if agencies_finished_sending_count.value < expected_agencies:
+                    logging.warning(
+                        f"action: sending_lottery_not_ready | result: success"
+                    )
+                    empty_response = WinnersResponseMessage.to_bytes([])
+                    Protocol.send_message(
+                        client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
+                    )
+                else:
+                    ready_to_send = True
+
+            if ready_to_send:
                 agency_winners = Server.get_lottery_winners(agency_id, read_bets_lock)
                 logging.info(
                     f"action: winners_retrieved | result: success | agency_id: {agency_id} | winners_count: {len(agency_winners)}"
