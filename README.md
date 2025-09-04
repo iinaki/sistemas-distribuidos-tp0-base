@@ -717,3 +717,109 @@ Acá surgio un problema con el que me encontré mientras testeaba el funcionamie
 2. Que el cliente cree el socket para mandar el `FinishedSending` y lo mantenga para despues mandar el `RequestWinners`, pero que si la `WinnersResponse` es `LotteryNotReady` entonces que se desconecte, duerma el tiempo definido como `time.Sleep(100 * time.Millisecond)` y vuelva a intentar.
 
 De esta manera dejamos lugar y tiempo a que los clientes se intercalen entre sí. No es la mejor opcion claramente, porque lo mas limpio seria usar la concurrencia, pero bueno lo veremos en el ejercicio 8. Terminamos así de manera gracefully el cliente y terminamos el ejercicio 7.
+
+# Resolucion del ejercicio 8
+
+Partimos de la base de que actualmente el servidor maneja una conexión a la vez, y los clientes tienen que desconectarse y reconectarse para darle su lugar a otros. Esto es muy ineficiente ya que básicamente dependemos de la conexión y de la buena “fe” del cliente y de su implementación, porque podría pasar perfectamente que si un cliente no tiene implementado el desconectado, se puede quedar bloqueado en el mensaje de `RequestWinners` sin liberar la conexión, impidiendo a otros clientes continuar con su flow.
+
+Vamos a ver cómo podemos implementar un sistema que permita la concurrencia partiendo del server actual. Arrancamos implementando por la función de inicio de nuestro programa: `server.run()` y acá nos topamos con la primera incógnita del ejercicio: que método de concurrencia usar. Investigando y haciendo leverage de los diferentes approaches decido usar multiprocessing antes que multithreading. Python para manejar la ejecución de threads dentro de un mismo proceso usa un mutex en el intérprete llamado Global Interpreter Lock (GIL), el impacto de GIL no se nota mucho en tareas que pasan mucho tiempo esperando por eventos externos como requests HTTP o tareas de I/O, pero si empieza a ser un bottleneck para tareas intensivas. Una de las ventajas de usar multiprocessing es que te evitas esto, ya que con procesos separados cada proceso tiene su propio intérprete y GIL, de esta manera el scheduler del sistema operativo reparte procesos entre cores y esto hace que el scheduling sea más estable que con threads compitiendo bajo el GIL.
+
+Después de tener esto definido vamos con la implementación, usamos `Process` de la librería `multiprocessing` para crear un nuevo proceso por cada uno de los sockets de cliente que nos lleguen. Para poder llevar a cabo la finalidad del servidor con la concurrencia vamos a tener que definir las variables compartidas entre los procesos y los mecanismos de sincronización. Lejos de hacer el sistema más complejo de lo que teníamos antes, la inclusión de estos nuevos elementos sumado con la concurrencia hacen que el sistema sea más simple de entender. Para iniciar un nuevo proceso le pasamos lo siguiente:
+
+```py
+process = Process(
+   target=self.__handle_new_client_process,
+   args=(
+       client_sock,
+       self._agencies_finished_sending_set,
+       self._expected_agencies,
+       self._store_bets_lock,
+       self._read_bets_lock,
+   ),
+)
+```
+
+Y no se necesitan más que estas variables para mantener la concurrencia, se definen al iniciar el server de esta manera:
+```py
+def __init__(self, port, listen_backlog, expected_agencies):
+    self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self._server_socket.bind(("", port))
+    self._server_socket.listen(listen_backlog)
+    self._running = True
+    self._expected_agencies = expected_agencies
+
+
+    self._manager = Manager()
+    self._agencies_finished_sending_set = self._manager.dict()
+
+    self._store_bets_lock = Lock()
+    self._read_bets_lock = RLock()
+    
+    self._processes = []
+
+
+    signal.signal(signal.SIGTERM, self._signal_handler)
+```
+
+- `self._manager = Manager()` para luego poder tener un `agencies_finished_sending_set = self._manager.dict()`, este va a ser el set que teníamos antes, solo que ahora es un diccionario con la variable en True, y va a marcar a los clientes que mandan el mensaje que han terminado de enviar sus bets. El diccionario del manager es seguro entre procesos porque cada operacion sobre este se va a convertir en un llamado al proceso manager, que sincroniza internamente con locks.
+- `self._expected_agencies`-> que va a ser el número fijo de clientes que nos pasan como variable de entorno
+- `self._store_bets_lock` -> definimos un lock de escritura que se va a usar cuando queramos escribir en `store_bets`
+- `self._read_bets_lock` -> definimos un lock de lectura que se va a usar cuando queramos leer las bets para calcular los ganadores de una agencia en particular.
+
+Luego de tener esto definido queda adaptar las partes del server que manejan los mensajes con el cliente para que usen las nuevas cosas. 
+En la parte del handling del mensaje bet lo único que tuve que cambiar es cómo se accede al `store_bets`. Bloqueamos el acceso al store para que solo un proceso a la vez pueda realizar esto:
+
+```py
+def process_successful_batch_bets(
+       batch_bets: list[Bet],
+       client_sock: socket.socket,
+       store_bets_lock,
+   ):
+    with store_bets_lock:
+        store_bets(batch_bets)
+        
+    for bet in batch_bets:
+        logging.info(
+            f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
+        )
+
+
+    Protocol.send_message(
+        client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(True)
+    )
+```
+
+Luego en la parte del handling del mensaje de `FinishedSending` lo único que hacemos es marcar como que la agencia con ese id ya terminó de enviar (`agencies_finished_sending_set[agency_id] = True`) y respondemos con éxito. Esto la verdad que quedó muy simple, y acá estamos manejando correctamente el acceso a una sección crítica haciendo uso del dict manejado por el manager como dijimos antes.
+
+```py
+def __handle_finished_sending_message(
+       client_sock,
+       message_bytes,
+       addr,
+       agencies_finished_sending_set,
+       expected_agencies,
+   ):
+    try:
+        agency_id = FinishedSendingMessage.from_bytes(message_bytes)
+        logging.info(
+            f"action: finished_sending_received | result: success | ip: {addr[0]} | agency_id: {agency_id}"
+        )
+
+        agencies_finished_sending_set[agency_id] = True
+
+        Protocol.send_message(
+            client_sock,
+            MSG_TYPE_FINISHED_SENDING,
+            BetResponseMessage.to_bytes(True),
+        )
+
+        logging.info(
+            f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(agencies_finished_sending_set)} | total_participating_agencies: {expected_agencies}"
+        )
+```
+
+Por último en el handler del mensaje `WinnersRequest` nuevamente vamos a leer de `agencies_finished_sending_set` por lo cual vamos a estar accediendo aquí a una sección crítica, hacemos la misma comparación que hacíamos en el ejercicio anterior, si `len(agencies_finished_sending_set) < expected_agencies` entonces la loteria no esta lista, de lo contrario obtenemos a los ganadores de la loteria para esa agencia. Para leer de load_bets usamos read_bets_lock que es un lock de lectura y de esta manera manejamos correctamente el acceso a estos datos.
+
+Terminado con eso no quedan más secciones críticas que manejar por lo que la demás lógica sigue siendo la misma que en el ejercicio 7. Al terminar de recibir mensajes del cliente hacemos un break para salir del loop de la conexión con ese cliente y volvemos al proceso principal, cerrando todos los file descriptors en nuestro paso. 
+
+Fin del TP0 :)

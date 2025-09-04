@@ -29,7 +29,6 @@ class Server:
 
         self._manager = Manager()
         self._agencies_finished_sending_set = self._manager.dict() 
-        self._agencies_finished_sending_lock = Lock()
     
         self._store_bets_lock = Lock() 
         self._read_bets_lock = RLock()
@@ -57,15 +56,15 @@ class Server:
                             args=(
                                 client_sock,
                                 self._agencies_finished_sending_set,
-                                self._agencies_finished_sending_lock,   
                                 self._expected_agencies,
                                 self._store_bets_lock,
-                                self._read_bets_lock,
+                                self._read_bets_lock, 
                             ),
                         )
                         process.start()
                         self._processes.append(process)
 
+                        client_sock.close()
                         self._cleanup_finished_processes()
 
                 except OSError as e:
@@ -98,7 +97,6 @@ class Server:
     def __handle_new_client_process(
         client_sock,
         agencies_finished_sending_set,
-        agencies_finished_sending_lock,
         expected_agencies,
         store_bets_lock,
         read_bets_lock,
@@ -107,7 +105,6 @@ class Server:
             Server.__handle_client_connection(
                 client_sock,
                 agencies_finished_sending_set,
-                agencies_finished_sending_lock,
                 expected_agencies,
                 store_bets_lock,
                 read_bets_lock,
@@ -127,7 +124,6 @@ class Server:
     def __handle_client_connection(
         client_sock,
         agencies_finished_sending_set,
-        agencies_finished_sending_lock,
         expected_agencies,
         store_bets_lock,
         read_bets_lock,
@@ -157,7 +153,6 @@ class Server:
                         message_bytes,
                         addr,
                         agencies_finished_sending_set,
-                        agencies_finished_sending_lock,
                         expected_agencies,
                     )
                 elif message_type == MSG_TYPE_WINNERS_REQUEST:
@@ -165,7 +160,6 @@ class Server:
                         client_sock,
                         message_bytes,
                         agencies_finished_sending_set,
-                        agencies_finished_sending_lock,
                         expected_agencies,
                         read_bets_lock,
                     )
@@ -235,7 +229,6 @@ class Server:
         message_bytes,
         addr,
         agencies_finished_sending_set,
-        agencies_finished_sending_lock,
         expected_agencies,
     ):
         try:
@@ -244,8 +237,7 @@ class Server:
                 f"action: finished_sending_received | result: success | ip: {addr[0]} | agency_id: {agency_id}"
             )
 
-            with agencies_finished_sending_lock:
-                agencies_finished_sending_set[agency_id] = True
+            agencies_finished_sending_set[agency_id] = True
 
             Protocol.send_message(
                 client_sock,
@@ -293,7 +285,6 @@ class Server:
         client_sock, 
         message_bytes, 
         agencies_finished_sending_set,
-        agencies_finished_sending_lock,
         expected_agencies,
         read_bets_lock,
     ):
@@ -303,22 +294,21 @@ class Server:
                 f"action: winners_request_received | result: success | agency_id: {agency_id}"
             )
 
-            with agencies_finished_sending_lock: 
-                if len(agencies_finished_sending_set) < expected_agencies:
-                    logging.warning(
-                        f"action: sending_lottery_not_ready | result: success"
-                    )
-                    empty_response = WinnersResponseMessage.to_bytes([])
-                    Protocol.send_message(
-                        client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
-                    )
-                else:
-                    agency_winners = Server.get_lottery_winners(agency_id, read_bets_lock)
-                    logging.info(
-                        f"action: winners_retrieved | result: success | agency_id: {agency_id} | winners_count: {len(agency_winners)}"
-                    )
-                    response = WinnersResponseMessage.to_bytes(agency_winners)
-                    Protocol.send_message(client_sock, MSG_TYPE_WINNERS_RESPONSE, response)
+            if len(agencies_finished_sending_set) < expected_agencies:
+                logging.warning(
+                    f"action: sending_lottery_not_ready | result: success"
+                )
+                empty_response = WinnersResponseMessage.to_bytes([])
+                Protocol.send_message(
+                    client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
+                )
+            else:
+                agency_winners = Server.get_lottery_winners(agency_id, read_bets_lock)
+                logging.info(
+                    f"action: winners_retrieved | result: success | agency_id: {agency_id} | winners_count: {len(agency_winners)}"
+                )
+                response = WinnersResponseMessage.to_bytes(agency_winners)
+                Protocol.send_message(client_sock, MSG_TYPE_WINNERS_RESPONSE, response)
 
         except Exception as e:
             logging.error(f"action: handle_winners_request | result: fail | error: {e}")
@@ -405,16 +395,11 @@ class Server:
     def process_successful_batch_bets(
         batch_bets: list[Bet],
         client_sock: socket.socket,
-        bets_len: int,
         store_bets_lock, 
     ):
         with store_bets_lock:
             store_bets(batch_bets)
-
-        # logging.info(
-        #     f"action: apuesta_recibida | result: success | cantidad: {bets_len}"
-        # )
-
+            
         for bet in batch_bets:
             logging.info(
                 f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
