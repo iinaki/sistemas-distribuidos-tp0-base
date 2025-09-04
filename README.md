@@ -825,4 +825,10 @@ Por último en el handler del mensaje `WinnersRequest` nuevamente vamos a leer d
 
 Terminado con eso no quedan más secciones críticas que manejar por lo que la demás lógica sigue siendo la misma que en el ejercicio 7. Al terminar de recibir mensajes del cliente hacemos un break para salir del loop de la conexión con ese cliente y volvemos al proceso principal, cerrando todos los file descriptors en nuestro paso. 
 
+# Seccion dedicada a shutdown y cierre de procesos
+
+Hago una seccion dedicada para explicar este tema porque me parece que es valioso, y es algo que aprendí con el TP. 
+
+![alt text](img/shutdown.png)
+
 Fin del TP0 :)
