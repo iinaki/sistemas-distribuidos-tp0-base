@@ -118,7 +118,7 @@ func main() {
 	client := common.NewClient(clientConfig)
 
 	signalChannel := make(chan os.Signal, 1)
-	signal.Notify(signalChannel, syscall.SIGTERM)
+	signal.Notify(signalChannel, syscall.SIGTERM, syscall.SIGINT)
 
 	clientDone := make(chan bool)
 	go func() {
@@ -133,7 +133,12 @@ func main() {
 	case sig := <-signalChannel:
 		log.Infof("action: receive_signal | result: in_progress | signal: %v ", sig)
 		client.Stop()
-		log.Infof("action: shutdown_client | result: success")
+		// select {
+		// case <-clientDone:
+		// 	log.Infof("action: client_graceful_shutdown | result: success")
+		// case <-time.After(2 * time.Second):
+		// 	log.Infof("action: client_graceful_shutdown | result: timeout")
+		// }
 		log.Infof("action: exit | result: success")
 	}
 }

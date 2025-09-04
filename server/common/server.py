@@ -19,28 +19,40 @@ from .messages import (
 from .protocol import Protocol
 from .utils import store_bets, Bet, load_bets, has_won
 
+SERVER_SOCKET_TIEMEOUT = 5.0  
+
 class Server:
     def __init__(self, port, listen_backlog, expected_agencies):
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.bind(("", port))
         self._server_socket.listen(listen_backlog)
+        self._server_socket.settimeout(SERVER_SOCKET_TIEMEOUT)
         self._running = True
         self._expected_agencies = expected_agencies
 
         self._agencies_finished_sending_lock = Lock()
-        self._agencies_finished_sending_count = Value('i', 0)
+        self._agencies_finished_sending_count = Value("i", 0)
 
-        self._store_bets_lock = Lock() 
+        self._store_bets_lock = Lock()
         self._read_bets_lock = RLock()
-        
+
         self._processes = []
 
         signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGINT, self._signal_handler)
 
     def _signal_handler(self, sig, frame):
         logging.info(f"action: shutdown_signal | signal: {sig}")
         self._running = False
-        self._cleanup_processes()
+
+        try:
+            self._server_socket.shutdown(socket.SHUT_RDWR)
+            logging.info("action: shutdown_server_socket | result: success")
+        except OSError as e:
+            logging.debug(
+                f"action: shutdown_server_socket | result: skip | reason: {e}"
+            )
 
     def run(self):
         try:
@@ -59,68 +71,83 @@ class Server:
                                 self._agencies_finished_sending_count,
                                 self._expected_agencies,
                                 self._store_bets_lock,
-                                self._read_bets_lock, 
+                                self._read_bets_lock,
                             ),
                         )
                         process.start()
                         self._processes.append(process)
 
-                        client_sock.close()
-                        self._cleanup_finished_processes()
+                        try:
+                            client_sock.close()
+                            logging.debug(
+                                "action: close_client_socket | scope: parent | result: success"
+                            )
+                        except OSError as e:
+                            logging.debug(
+                                f"action: close_client_socket | scope: parent | error: {e}"
+                            )
 
+                except socket.timeout:
+                    continue
                 except OSError as e:
                     if self._running:
                         logging.error(
                             f"action: accept_connection | result: fail | error: {e}"
                         )
-                    if client_sock is not None:
-                        client_sock.close()
-                    
-                    self._server_socket.close()
+                    else:
+                        logging.info(
+                            "action: accept_connection | result: interrupted | reason: shutdown"
+                        )
+                    # Solo limpiar si hay error y no es shutdown
+                    if "client_sock" in locals() and client_sock is not None:
+                        try:
+                            client_sock.close()
+                        except OSError:
+                            pass
                     break
+                finally:
+                    self._cleanup_finished_processes()
         finally:
+            logging.info("action: server_shutdown | start")
+            try:
+                self._server_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  
+
+            try:
+                self._server_socket.close()
+                logging.info("action: close_server_socket | result: success")
+            except OSError as e:
+                logging.debug(f"action: close_server_socket | error: {e}")
+
             self._cleanup_processes()
-            self._server_socket.close()
+            logging.info("action: server_shutdown | result: success")
 
     def _cleanup_finished_processes(self):
         self._processes = [p for p in self._processes if p.is_alive()]
 
     def _cleanup_processes(self):
-        for process in self._processes:
-            if process.is_alive():
-                process.terminate()
-                process.join(timeout=2)
-                if process.is_alive():
-                    process.kill()
+        logging.info("action: cleanup_processes | start")
+        for p in self._processes:
+            if p.is_alive():
+                logging.info(f"action: terminate_process | process: {p.pid}")
+                p.terminate()
+        for p in self._processes:
+            p.join(timeout=2)
+        for p in self._processes:
+            if p.is_alive():
+                logging.warning(
+                    f"action: kill_process | process: {p.pid} | reason: still_alive"
+                )
+                try:
+                    p.kill()
+                except AttributeError:
+                    p.terminate()
+                p.join(timeout=2)
+            else:
+                logging.info(f"action: process_terminated | process: {p.pid}")
         self._processes.clear()
-
-    # @staticmethod
-    # def __handle_new_client_process(
-    #     client_sock,
-    #     agencies_finished_sending_set,
-    #     agencies_finished_sending_lock,
-    #     expected_agencies,
-    #     store_bets_lock,
-    #     read_bets_lock,
-    # ):
-    #     try:
-    #         Server.__handle_client_connection(
-    #             client_sock,
-    #             agencies_finished_sending_set,
-    #             expected_agencies,
-    #             store_bets_lock,
-    #             read_bets_lock,
-    #         )
-    #     except Exception as e:
-    #         logging.error(f"action: handle_client_process | result: fail | error: {e}")
-    #     finally:
-    #         try:
-    #             client_sock.close()
-    #             logging.debug("action: close_client_connection | result: success")
-    #         except OSError as e:
-    #             logging.error(
-    #                 f"action: close_client_connection | result: fail | error: {e}"
-    #             )
+        logging.info("action: cleanup_processes | result: success")
 
     @staticmethod
     def __handle_new_client_process(
@@ -131,6 +158,12 @@ class Server:
         store_bets_lock,
         read_bets_lock,
     ):
+        def _new_process_signal_handler(sig, frame):
+            logging.info(f"action: shutdown_signal | scope: child | signal: {sig}")
+            return
+
+        signal.signal(signal.SIGTERM, _new_process_signal_handler)
+        signal.signal(signal.SIGINT, _new_process_signal_handler)
         try:
             addr = client_sock.getpeername()
             logging.info(f"action: accept_bet | result: in_progress")
@@ -183,11 +216,17 @@ class Server:
             logging.info(f"action: connection_ended | result: fail | address: {addr}")
         finally:
             try:
+                client_sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  
+            try:
                 client_sock.close()
-                logging.debug("action: close_client_connection | result: success")
+                logging.debug(
+                    "action: close_client_socket | scope: child | result: success"
+                )
             except OSError as e:
-                logging.error(
-                    f"action: close_client_connection | result: fail | error: {e}"
+                logging.debug(
+                    f"action: close_client_socket | scope: child | error: {e}"
                 )
 
     def __accept_new_connection(self):
@@ -206,15 +245,15 @@ class Server:
                 f"action: accept_connections | result: success | ip: {addr[0]}"
             )
             return c
+        except socket.timeout:
+                    logging.info(f"action: no_new_connections_after_timeout | result: exit ")
         except OSError as e:
             if self._running:
                 logging.error(f"action: accept_connections | result: fail | error: {e}")
             return None
 
     @staticmethod
-    def __handle_bet_message(
-        client_sock, message_bytes, addr, store_bets_lock
-    ):
+    def __handle_bet_message(client_sock, message_bytes, addr, store_bets_lock):
         try:
             batch_bets = Server.parse_batch_bet_message(message_bytes)
         except Exception as e:
@@ -271,7 +310,7 @@ class Server:
                 MSG_TYPE_FINISHED_SENDING,
                 BetResponseMessage.to_bytes(False),
             )
-    
+
     @staticmethod
     def get_lottery_winners(agency_id, read_bets_lock):
         try:
@@ -289,14 +328,14 @@ class Server:
                     agency_winners.append(bet.document)
 
             return agency_winners
-        
+
         except Exception as e:
             logging.error(f"action: execute_lottery | result: fail | error: {e}")
 
     @staticmethod
     def __handle_winners_request_message(
-        client_sock, 
-        message_bytes, 
+        client_sock,
+        message_bytes,
         agencies_finished_sending_lock,
         agencies_finished_sending_count,
         expected_agencies,
@@ -358,10 +397,10 @@ class Server:
                 return None, False, offset
 
             individual_length = int.from_bytes(
-                message_bytes[offset:offset+4], byteorder="big", signed=False
+                message_bytes[offset : offset + 4], byteorder="big", signed=False
             )
-            is_last_bet_flag = message_bytes[offset+4]
-            is_last_bet = (is_last_bet_flag != 0)
+            is_last_bet_flag = message_bytes[offset + 4]
+            is_last_bet = is_last_bet_flag != 0
 
             content_start = offset + 5
             content_end = content_start + individual_length
@@ -414,11 +453,11 @@ class Server:
     def process_successful_batch_bets(
         batch_bets: list[Bet],
         client_sock: socket.socket,
-        store_bets_lock, 
+        store_bets_lock,
     ):
         with store_bets_lock:
             store_bets(batch_bets)
-            
+
         for bet in batch_bets:
             logging.info(
                 f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}"
@@ -438,3 +477,19 @@ class Server:
         Protocol.send_message(
             client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
         )
+
+def shutdown_and_close(sock: socket.socket, who: str = "socket"):
+    if sock is None:
+        return
+    try:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+            logging.debug(f"action: shutdown_fd | result: success | who: {who}")
+        except OSError as e:
+            logging.debug(
+                f"action: shutdown_fd | result: skip | who: {who} | reason: {e}"
+            )
+        sock.close()
+        logging.debug(f"action: close_fd | result: success | who: {who}")
+    except OSError as e:
+        logging.error(f"action: close_fd | result: fail | who: {who} | error: {e}")

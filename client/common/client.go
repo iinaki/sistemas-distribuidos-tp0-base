@@ -159,12 +159,21 @@ func (c *Client) StartClientLoop() {
 
 func (c *Client) closeConnection() {
 	if c.conn != nil {
+		log.Debugf("action: shutdown_connection | result: in_progress | client_id: %v", c.config.ID)
+
+		if tcpConn, ok := c.conn.(*net.TCPConn); ok {
+			if err := tcpConn.CloseWrite(); err != nil {
+				log.Debugf("action: close_write | result: fail | client_id: %v | error: %v",
+					c.config.ID, err)
+			} else {
+				log.Debugf("action: close_write | result: success | client_id: %v", c.config.ID)
+			}
+		}
+
 		err := c.conn.Close()
 		if err != nil {
 			log.Errorf("action: close_connection | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
+				c.config.ID, err)
 		} else {
 			log.Debugf("action: close_connection | result: success | client_id: %v", c.config.ID)
 		}
