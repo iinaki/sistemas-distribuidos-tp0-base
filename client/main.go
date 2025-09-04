@@ -115,7 +115,7 @@ func main() {
 	client := common.NewClient(clientConfig)
 
 	signalChannel := make(chan os.Signal, 1)
-	signal.Notify(signalChannel, syscall.SIGTERM)
+	signal.Notify(signalChannel, syscall.SIGTERM, syscall.SIGINT)
 
 	clientDone := make(chan bool)
 	go func() {
