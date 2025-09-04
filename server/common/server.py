@@ -80,11 +80,11 @@ class Server:
                         try:
                             client_sock.close()
                             logging.debug(
-                                "action: close_client_socket | scope: parent | result: success"
+                                "action: close_client_socket | result: success"
                             )
                         except OSError as e:
                             logging.debug(
-                                f"action: close_client_socket | scope: parent | error: {e}"
+                                f"action: close_client_socket | error: {e}"
                             )
 
                 except socket.timeout:
