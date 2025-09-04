@@ -825,10 +825,30 @@ Por último en el handler del mensaje `WinnersRequest` nuevamente vamos a leer d
 
 Terminado con eso no quedan más secciones críticas que manejar por lo que la demás lógica sigue siendo la misma que en el ejercicio 7. Al terminar de recibir mensajes del cliente hacemos un break para salir del loop de la conexión con ese cliente y volvemos al proceso principal, cerrando todos los file descriptors en nuestro paso. 
 
-# Seccion dedicada a shutdown y cierre de procesos
+## Seccion dedicada a shutdown y cierre de procesos
 
-Hago una seccion dedicada para explicar este tema porque me parece que es valioso, y es algo que aprendí con el TP. 
+Me parece interesante comentar los nuevos agregados para manejar bien todo el cerrado de file descriptors en el programa, porque si bien traíamos del ejercicio 4 el manejo de las señales para cortar el programa y cerrar correctamente (`SIGTERM` y `SIGINT`) estas ya empezaban a quedarse cortas para el momento en que llegamos al ejercicio 8 porque el numero de FDs abiertos era mucho mayor. La idea general de todo esto es que un proceso no termine abruptamente con `exit(1)` sino que podamos manejar bien los errores y salir de cada loop correctamente, hasta llegar al final del programa. 
+
+Una idea que elijo implementar por ejemplo es un timeout en el server socket, definido arbitrariamente a 5 segundos, por lo que si el server no recibe ningún nuevo socket en 5 segundos, vamos a salir del accept y cerrar las cosas correctamente, por lo que cuando termine el programa, a los 5 segundos vamos a ver algo asi:
 
 ![alt text](img/shutdown.png)
+
+Cómo manejamos procesos tengo un par de helper funcs: `self._cleanup_finished_processes()` y `self._cleanup_processes()`. La primera nos ayuda a limpiar los procesos que ya han terminado y la segunda nos ayuda a cerrar los FDs de los procesos cuando cierre el servidor. Luego por último, algo que me dio un poco de problemas fue el tema de cerrar el socket que le pasamos al proceso “hijo”, cuando terminamos de handelear un proceso de un cliente hacemos:
+```py
+finally:
+    try:
+        client_sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass 
+    try:
+        client_sock.close()
+        logging.debug(
+            "action: close_client_socket | result: success"
+        )
+    except OSError as e:
+        logging.debug(
+            f"action: close_client_socket | error: {e}"
+        )
+```
 
 Fin del TP0 :)

@@ -477,19 +477,3 @@ class Server:
         Protocol.send_message(
             client_sock, MSG_TYPE_BET, BetResponseMessage.to_bytes(False)
         )
-
-def shutdown_and_close(sock: socket.socket, who: str = "socket"):
-    if sock is None:
-        return
-    try:
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-            logging.debug(f"action: shutdown_fd | result: success | who: {who}")
-        except OSError as e:
-            logging.debug(
-                f"action: shutdown_fd | result: skip | who: {who} | reason: {e}"
-            )
-        sock.close()
-        logging.debug(f"action: close_fd | result: success | who: {who}")
-    except OSError as e:
-        logging.error(f"action: close_fd | result: fail | who: {who} | error: {e}")
