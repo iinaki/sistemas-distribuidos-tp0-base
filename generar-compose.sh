@@ -20,6 +20,7 @@ services:
     entrypoint: python3 /main.py
     environment:
       - PYTHONUNBUFFERED=1
+      - EXPECTED_AGENCIES=${CLIENT_COUNT}
     networks:
       - testing_net
     volumes:

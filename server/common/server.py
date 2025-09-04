@@ -19,23 +19,18 @@ from .utils import store_bets, Bet, load_bets, has_won
 
 
 class Server:
-    def __init__(self, port, listen_backlog):
+    def __init__(self, port, listen_backlog, expected_agencies):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(("", port))
         self._server_socket.listen(listen_backlog)
         self._running = True
+        self._expected_agencies = expected_agencies
 
         self._agencies_finished = set()
-        self._lottery_executed = False
-        self._winning_number = None
-        self._winners = []
-        self._participating_agencies = set()
 
-    def _execute_lottery(self):
-        if self._lottery_executed:
-            return
-
+    @staticmethod
+    def get_lottery_winners(agency_id):
         try:
             logging.info("action: execute_lottery | result: in_progress")
 
@@ -44,51 +39,34 @@ class Server:
                 f"action: load_all_bets | result: success | total_bets: {len(all_bets)}"
             )
 
-            winners = []
+            agency_winners = []
             for bet in all_bets:
-                if has_won(bet):
-                    winner_info = {
-                        "name": f"{bet.first_name} {bet.last_name}",
-                        "document": bet.document,
-                        "number": bet.number,
-                        "agency": bet.agency,
-                    }
-                    winners.append(winner_info)
+                if has_won(bet) and bet.agency == int(agency_id):
+                    agency_winners.append(bet.document)
 
-            self._winners = winners
-            self._lottery_executed = True
-
-            logging.info(
-                f"action: execute_lottery | result: success | winners_count: {len(winners)}"
-            )
-            logging.debug(f"action: execute_lottery_winners | result: success | winners: {self._winners}")
-
+            return agency_winners
+        
         except Exception as e:
             logging.error(f"action: execute_lottery | result: fail | error: {e}")
-            self._lottery_executed = False
 
     def run(self):
-        """
-        Dummy Server loop
-
-        Server that accept a new connections and establishes a
-        communication with a client. After client with communucation
-        finishes, servers starts to accept new connections again
-        """
-
-        # TODO: Modify this program to handle signal to graceful shutdown
-        # the server
         while self._running:
             try:
                 client_sock = self.__accept_new_connection()
+                if client_sock is None or not self._running:
+                        break
                 if client_sock:
                     self.__handle_client_connection(client_sock)
+                
+                client_sock.close()
             except OSError as e:
                 if self._running:
                     logging.error(
                         f"action: accept_connection | result: fail | error: {e}"
                     )
                 break
+            
+        self._server_socket.close()
 
     def __handle_client_connection(self, client_sock):
         try:
@@ -172,8 +150,6 @@ class Server:
             )
             return
 
-        self._participating_agencies.add(batch_bets[0].agency)
-
         bets_len = len(batch_bets)
 
         try:
@@ -192,9 +168,9 @@ class Server:
             )
 
             self._agencies_finished.add(agency_id)
-            total_participating = len(self._participating_agencies)
+            
             logging.info(
-                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)} | total_participating_agencies: {total_participating}"
+                f"action: agency_finished_registered | result: success | agency_id: {agency_id} | agencies_finished: {len(self._agencies_finished)} | total_participating_agencies: {self._expected_agencies}"
             )
 
             Protocol.send_message(
@@ -202,12 +178,6 @@ class Server:
                 MSG_TYPE_FINISHED_SENDING,
                 BetResponseMessage.to_bytes(True),
             )
-
-            if len(self._agencies_finished) >= total_participating and not self._lottery_executed:
-                logging.info(
-                    f"action: all_agencies_finished | result: success | total_agencies: {total_participating}"
-                )
-                self._execute_lottery()
 
         except Exception as e:
             logging.error(
@@ -226,18 +196,14 @@ class Server:
                 f"action: winners_request_received | result: success | agency_id: {agency_id}"
             )
 
-            if not self._lottery_executed:
+            if len(self._agencies_finished) < self._expected_agencies:
                 logging.info("action: winners_request | result: in_progress")
                 empty_response = WinnersResponseMessage.to_bytes([])
                 Protocol.send_message(
                     client_sock, MSG_TYPE_LOTTERY_NOT_READY, empty_response
                 )
             else:
-                agency_winners = [
-                    bet["document"]
-                    for bet in self._winners
-                    if bet["agency"] == int(agency_id)
-                ]
+                agency_winners = Server.get_lottery_winners(agency_id)
                 logging.info(
                     f"action: winners_retrieved | result: success | agency_id: {agency_id} | winners_count: {len(agency_winners)}"
                 )
