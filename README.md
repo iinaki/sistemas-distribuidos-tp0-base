@@ -623,11 +623,11 @@ Vamos a empezar definiendo los nuevos mensajes por manejar tanto del cliente com
 - `Bet` -> el batch de apuestas que ya sabemos manejar
 - `BetResponse` -> la respuesta al mensaje Bet que ya sabemos manejar
 - `FinishedSending` -> un cliente le avisa al servidor que ya envio todas las apuestas. Necesita enviar `agency id`, podemos hacer que el mensaje sea de la siguiente forma para seguir con el formato standard que definimos en el ejercicio 5: `“AGENCY_ID={agency_id}"`.
-- `FinishedSendingSuccess` o `FinishedSendingError`
+- `FinishedSendingSuccess` o `FinishedSendingError` -> el cliente si recibe la respuesta de OK procede a enviar el `WinnersRequest`
 - `WinnersRequest` -> cliente consulta por lista de ganadores de su agencia, envia su `agency id`. Si el server recibe este mensaje y la lotería todavía no se ha ejecutado, va a enviar un mensaje de tipo `LotteryNotReady` indicando que la lotería no está lista. De esta manera el cliente recibe la información y vuelve a enviar el mensaje `WinnersRequest` hasta que la lotería este lista.
 - `WinnersResponse` -> Cuando la loteria esta lista server responde con ganadores, esto lo podemos definir como una lista de dnis separados por comas y siguiendo el formato del mensaje de `Bet`, tipo: `“WINNERS=dni1,dni2,dni3”`.
 
-Teniendo todo esto en cuenta, arme otro expandiendo el del ejercicio 5 en donde podemos ver los mensajes que vamos a tener y cómo se va a comportar el sistema:
+Teniendo todo esto en cuenta, arme otro mermaid expandiendo el del ejercicio 5 en donde podemos ver los mensajes que vamos a tener y cómo se va a comportar el sistema:
 
 ![alt text](img/mermaid7.png)
 
@@ -666,10 +666,13 @@ else:
 
 Si recibimos un mensaje de `Bet`, entonces aplicamos la lógica que teníamos antes: parseamos el batch y lo guardamos.
 
-Si recibimos un mensaje `FinishedSending` vamos a tener que marcar que esa agencia ya ha terminado de enviar las bets. Para esto decido que algo simple es guardarnos como variable interna del server un set que contenga los números de agencias que ya terminaron, de esta manera evitamos duplicados por si alguna manda el mensaje dos veces. Luego de agregar la agencia al set le respondemos al cliente que esto fue `“succesfull”` y pasamos a un chequeo muy importante: tenemos que realizar el chequeo de que si todas las agencias terminaron entonces hay que correr la lotería. 
-Pero qué significa correr/ejecutar la lotería? La cátedra nos proporciona las funciones internas `load_bets` y `has_won`, `load_bets` nos devuelve todas las bets que han sido guardadas, usamos esta info para ir chequeando una por una si esa bet ha ganado con `has_won`, de esta manera al terminar de correr todas las apuestas vamos a quedarnos con un array de ganadores y nos lo vamos a guardar internamente en el server.
+Si recibimos un mensaje `FinishedSending` vamos a tener que marcar que esa agencia ya ha terminado de enviar las bets. Para esto decido que algo simple es guardarnos como variable interna del server un set que contenga los números de agencias que ya terminaron, de esta manera evitamos duplicados por si alguna manda el mensaje dos veces. Luego de agregar la agencia al set le respondemos al cliente que esto fue `“succesfull”`.
 
-Por último falta ver como handelear el mensaje de `WinnersRequest`. Si la loteria todavía no ha sido ejecutada, respondemos con el tipo de mensaje `LotteryNotReady`, de esta manera le decimos al cliente que intente de nuevo en un rato. Caso contrario, si la lotería fue ejecutada, entonces obtenemos los winners para esa agencia en particular y le respondemos con los dnis, siguiendo el formato `“WINNERS=dni1,dni2,dni3”` que mencionamos anteriormente.
+Por último falta ver como handelear el mensaje de `WinnersRequest`. Si la loteria todavía no puede ser ejecutada, respondemos con el tipo de mensaje `LotteryNotReady`, de esta manera le decimos al cliente que intente de nuevo en un rato. Caso contrario, si la lotería puede ser ejecutada, entonces obtenemos los winners para esa agencia en particular y le respondemos con los dnis, siguiendo el formato `“WINNERS=dni1,dni2,dni3”` que mencionamos anteriormente.
+
+Pero como vamos a hacer el chequeo de si la loteria se puede ejecutar o no? Necesitamos saber que todas las agencias han terminado (para esto nos ayuda el set `_agencies_finished`) y lo comparamos contra el numero total de agencias que necesitamos que terminen. Esta ultima es otra variable interna nueva que introducimos en este ejercicio: `self._expected_agencies`. La obtenemos como variable de entorno y esto se puede agregar facilmente a lo que tenemos actualmente agregandola al script `generar-compose`. 
+Esta comparacion entonces indica si se puede o no correr la loteria. 
+Y ahora tenemos la pregunta de qué significa correr/ejecutar la lotería? La cátedra nos proporciona las funciones internas `load_bets` y `has_won`, `load_bets` nos devuelve todas las bets que han sido guardadas, usamos esta info para ir chequeando una por una si esa bet ha ganado con `has_won`, de esta manera al terminar de correr todas las apuestas vamos a quedarnos con un array de ganadores, luego filtramos estos ganadores por la agencia que nos haga el request y respondemos con el mensaje `WinnersResponse` enviando los ganadores a traves de la red.
 
 Por otro lado ahora del lado del cliente la cuestión es un poco mas "secuencial", viendo el codigo ya nos podemos dar cuenta porque se ve así el ClientLoop:
 ```go
@@ -710,7 +713,7 @@ El flujo del cliente entonces es primero cargar las bets del CSV, luego enviarla
 
 Lo que le sigue entonces es enviar el mensaje `FinishedSending` que esto lo hacemos mediante `sendFinishedSending`. Este es un método bastante simple que nada más envía este mensaje y obtiene la respuesta, si esta es `“success”` continua la ejecución. 
 
-Luego pasamos al último mensaje del cliente que es el `RequestWinners`. Hacemos estos pasos dentro de un loop: enviamos el mensaje y esperamos la respuesta del servidor, si este responde con el mensaje de tipo MsgTypeLotteryNotReady entonces el cliente debe esperar un poco y volver a mandar el mensaje, definimos acá un pequeño sleep de `time.Sleep(100 * time.Millisecond)`. Una vez que la lotería esté lista el servidor va a responder con el mensaje `WinnersResponse`, si todo sale bien lo paramos, obtenemos los dnis ganadores y logueamos la cantidad de ganadores para cumplir con la consigna. 
+Luego pasamos al último mensaje del cliente que es el `RequestWinners`. Hacemos estos pasos dentro de un loop: enviamos el mensaje y esperamos la respuesta del servidor, si este responde con el mensaje de tipo `MsgTypeLotteryNotReady` entonces el cliente debe esperar un poco y volver a mandar el mensaje, definimos acá un pequeño sleep de `time.Sleep(100 * time.Millisecond)`. Una vez que la lotería esté lista el servidor va a responder con el mensaje `WinnersResponse`, si todo sale bien lo paramos, obtenemos los dnis ganadores y logueamos la cantidad de ganadores para cumplir con la consigna. 
 
 Acá surgio un problema con el que me encontré mientras testeaba el funcionamiento del sistema en general. Sin darme cuenta, inicialmente, hice que un cliente mantenga la conexión con el server durante toda su ejecucion, es decir desde el `sendBets` hasta el `RequestWinners`, pero cual es el problema con esto? Como nuestro server no es concurrente todavía solo maneja una conexión por vez, entonces un problema que tuve es que un cliente acaparaba toda la conexión con el server ya que se quedaba loopeando esperando que el `RequestWinners` le devuelva exito cuando nunca lo iba a hacer. Tuve que implementar entonces una serie de desconexiones en algunos puntos clave: 
 1. Que un cliente se desconecte y cierre el socket cuando termine de mandar las bets, y de paso que duerma un `LoopPeriod`, y luego se conecte nuevamente para mandar el `FinishedSending`. De esta manera dejamos a los demas clientes lugar para mandar las bets.
